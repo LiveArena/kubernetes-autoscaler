@@ -53,11 +53,11 @@ make-image: make-image-arch-$(GOARCH)
 
 make-image-arch-%:
 ifdef BASEIMAGE
-	docker build --pull --build-arg BASEIMAGE=${BASEIMAGE} \
+	docker buildx build --platform linux/$* --no-cache --pull --build-arg BASEIMAGE=${BASEIMAGE} \
 		-t ${IMAGE}-$*:${TAG} \
 		-f Dockerfile.$* .
 else
-	docker build --pull \
+	docker buildx build --platform linux/$* --no-cache --pull \
 		-t ${IMAGE}-$*:${TAG} \
 		-f Dockerfile.$* .
 endif
@@ -88,13 +88,15 @@ format:
 	test -z "$$(find . -path ./vendor -prune -type f -o -name '*.go' -exec gofmt -s -d {} + | tee /dev/stderr)" || \
 	test -z "$$(find . -path ./vendor -prune -type f -o -name '*.go' -exec gofmt -s -w {} + | tee /dev/stderr)"
 
-docker-builder:
-	docker build --network=${DOCKER_NETWORK} -t autoscaling-builder ../builder
+docker-builder: docker-builder-arch-$(GOARCH)
+
+docker-builder-arch-%:
+	docker buildx build --platform linux/$* --no-cache -o type=docker --network=${DOCKER_NETWORK} -t autoscaling-builder-$* ../builder
 
 build-in-docker: build-in-docker-arch-$(GOARCH)
 
-build-in-docker-arch-%: clean-arch-% docker-builder
-	docker run ${RM_FLAG} -v `pwd`:/gopath/src/k8s.io/autoscaler/cluster-autoscaler/:Z autoscaling-builder:latest \
+build-in-docker-arch-%: clean-arch-% docker-builder-arch-%
+	docker run --platform linux/$* ${RM_FLAG} -v `pwd`:/gopath/src/k8s.io/autoscaler/cluster-autoscaler/:Z autoscaling-builder-$*:latest \
 		bash -c 'cd /gopath/src/k8s.io/autoscaler/cluster-autoscaler && BUILD_TAGS=${BUILD_TAGS} LDFLAGS="${LDFLAGS}" make build-arch-$*'
 
 release: $(addprefix build-in-docker-arch-,$(ALL_ARCH)) execute-release
@@ -106,7 +108,7 @@ container-arch-%: build-in-docker-arch-% make-image-arch-%
 	@echo "Full in-docker image ${TAG}${FOR_PROVIDER}-$* completed"
 
 test-in-docker: clean docker-builder
-	docker run ${RM_FLAG} -v `pwd`:/cluster-autoscaler/:Z autoscaling-builder:latest bash -c 'cd /cluster-autoscaler && go test -race ./... ${TAGS_FLAG}'
+	docker run ${RM_FLAG} -v `pwd`:/cluster-autoscaler/:Z autoscaling-builder-$(GOARCH):latest bash -c 'cd /cluster-autoscaler && go test -race ./... ${TAGS_FLAG}'
 
 .PHONY: all build test-unit clean format execute-release dev-release docker-builder build-in-docker release generate push-image push-manifest
 
