@@ -32,7 +32,7 @@ func (a *AzureMachineLookup) FindMachineByProviderID(providerID normalizedProvid
 	var err error
 
 	// First check for AzureMachinePoolMachine if available
-	if a.extension.azureMachinePoolMachineAvailable {
+	if a.extension != nil && a.extension.azureMachinePoolMachineAvailable && a.extension.azureMachinePoolMachineInformer != nil {
 		objs, err = a.extension.azureMachinePoolMachineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
 		if err != nil {
 			return nil, err
@@ -40,7 +40,7 @@ func (a *AzureMachineLookup) FindMachineByProviderID(providerID normalizedProvid
 	}
 
 	// Fallback to standard Machine lookup if no Azure machine found
-	if len(objs) == 0 {
+	if len(objs) == 0 && a.controller != nil && a.controller.machineInformer != nil {
 		objs, err = a.controller.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
 		if err != nil {
 			return nil, err

@@ -32,7 +32,7 @@ func TestAzureProviderIDNormalization(t *testing.T) {
 		{
 			name:       "azure standard vm",
 			providerID: "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachines/control-plane-1cbe5-d4dx7",
-			expected:   "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachines/control-plane-1cbe5-d4dx7",
+			expected:   "control-plane-1cbe5-d4dx7",
 		},
 		{
 			name:       "azure vmss",

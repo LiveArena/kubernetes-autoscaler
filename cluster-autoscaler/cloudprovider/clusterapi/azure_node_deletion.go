@@ -39,6 +39,11 @@ func (a *AzureNodeDeletionHandler) HandleAzureMachinePoolDeletion(
 		return nil // Not an Azure machine pool machine, skip
 	}
 
+	// Check for nil controller or managementClient (e.g., in tests)
+	if a.controller == nil || a.controller.managementClient == nil || a.extension == nil {
+		return nil // Cannot perform deletion without proper initialization
+	}
+
 	// Delete AzureMachinePoolMachine before scaling down pool
 	err := a.controller.managementClient.Resource(a.extension.azureMachinePoolMachineResource).
 		Namespace(machine.GetNamespace()).
@@ -46,7 +51,9 @@ func (a *AzureNodeDeletionHandler) HandleAzureMachinePoolDeletion(
 
 	if err != nil {
 		// Unmark machine for deletion on error
-		_ = nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
+		if nodeGroup != nil && nodeGroup.scalableResource != nil {
+			_ = nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
+		}
 		return err
 	}
 

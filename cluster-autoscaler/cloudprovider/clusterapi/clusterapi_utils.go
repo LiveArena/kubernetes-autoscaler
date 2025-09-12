@@ -227,12 +227,18 @@ func machineSetHasMachineDeploymentOwnerRef(machineSet *unstructured.Unstructure
 }
 
 // normalizedProviderString splits s on '/' returning everything after
-// the last '/'. For Azure provider IDs, returns the full provider ID.
+// the last '/'. For Azure VMSS provider IDs, returns the full provider ID.
+// For Azure standard VMs, extracts the VM name.
 func normalizedProviderString(s string) normalizedProviderID {
 	// Check for Azure provider ID first
-	azureNormalizer := &AzureProviderIDNormalizer{}
-	if azureNormalizer.IsAzureProviderID(s) {
-		return azureNormalizer.NormalizeProviderID(s)
+	if strings.HasPrefix(s, "azure://") {
+		// For Azure VMSS (contains virtualMachineScaleSets), return the full provider ID
+		if strings.Contains(s, "virtualMachineScaleSets") {
+			return normalizedProviderID(s)
+		}
+		// For Azure standard VMs, extract just the VM name (last part after final '/')
+		split := strings.Split(s, "/")
+		return normalizedProviderID(split[len(split)-1])
 	}
 
 	// Fallback to existing logic for other providers
