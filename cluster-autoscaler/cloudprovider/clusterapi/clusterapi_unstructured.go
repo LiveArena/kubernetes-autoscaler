@@ -162,6 +162,12 @@ type autoscalingv1ScaleSpec struct {
 }
 
 func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstructured.Unstructured) error {
+	// Use Azure resource marker if available
+	if r.controller.azureIntegration != nil {
+		return r.controller.azureIntegration.resourceMarker.UnmarkMachineForDeletion(machine)
+	}
+
+	// Fallback to existing implementation
 	u, err := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(machine.GetNamespace()).Get(context.TODO(), machine.GetName(), metav1.GetOptions{})
 	if err != nil {
 		return err
@@ -176,6 +182,12 @@ func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstruct
 }
 
 func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructured.Unstructured) error {
+	// Use Azure resource marker if available
+	if r.controller.azureIntegration != nil {
+		return r.controller.azureIntegration.resourceMarker.MarkMachineForDeletion(machine)
+	}
+
+	// Fallback to existing implementation
 	u, err := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(machine.GetNamespace()).Get(context.TODO(), machine.GetName(), metav1.GetOptions{})
 	if err != nil {
 		return err
