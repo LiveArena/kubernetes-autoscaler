@@ -1,0 +1,349 @@
+diff --git a/cluster-autoscaler/Makefile b/cluster-autoscaler/Makefile
+index fb82bb2b5..6afc4082c 100644
+--- a/cluster-autoscaler/Makefile
++++ b/cluster-autoscaler/Makefile
+@@ -53,11 +53,11 @@ make-image: make-image-arch-$(GOARCH)
+
+ make-image-arch-%:
+ ifdef BASEIMAGE
+-	docker build --pull --build-arg BASEIMAGE=${BASEIMAGE} \
++	docker buildx build --platform linux/$* --no-cache --pull --build-arg BASEIMAGE=${BASEIMAGE} \
+ 		-t ${IMAGE}-$*:${TAG} \
+ 		-f Dockerfile.$* .
+ else
+-	docker build --pull \
++	docker buildx build --platform linux/$* --no-cache --pull \
+ 		-t ${IMAGE}-$*:${TAG} \
+ 		-f Dockerfile.$* .
+ endif
+@@ -88,13 +88,15 @@ format:
+ 	test -z "$$(find . -path ./vendor -prune -type f -o -name '*.go' -exec gofmt -s -d {} + | tee /dev/stderr)" || \
+ 	test -z "$$(find . -path ./vendor -prune -type f -o -name '*.go' -exec gofmt -s -w {} + | tee /dev/stderr)"
+
+-docker-builder:
+-	docker build --network=${DOCKER_NETWORK} -t autoscaling-builder ../builder
++docker-builder: docker-builder-arch-$(GOARCH)
++
++docker-builder-arch-%:
++	docker buildx build --platform linux/$* --no-cache -o type=docker --network=${DOCKER_NETWORK} -t autoscaling-builder-$* ../builder
+
+ build-in-docker: build-in-docker-arch-$(GOARCH)
+
+-build-in-docker-arch-%: clean-arch-% docker-builder
+-	docker run ${RM_FLAG} -v `pwd`:/gopath/src/k8s.io/autoscaler/cluster-autoscaler/:Z autoscaling-builder:latest \
++build-in-docker-arch-%: clean-arch-% docker-builder-arch-%
++	docker run --platform linux/$* ${RM_FLAG} -v `pwd`:/gopath/src/k8s.io/autoscaler/cluster-autoscaler/:Z autoscaling-builder-$*:latest \
+ 		bash -c 'cd /gopath/src/k8s.io/autoscaler/cluster-autoscaler && BUILD_TAGS=${BUILD_TAGS} LDFLAGS="${LDFLAGS}" make build-arch-$*'
+
+ release: $(addprefix build-in-docker-arch-,$(ALL_ARCH)) execute-release
+@@ -106,7 +108,7 @@ container-arch-%: build-in-docker-arch-% make-image-arch-%
+ 	@echo "Full in-docker image ${TAG}${FOR_PROVIDER}-$* completed"
+
+ test-in-docker: clean docker-builder
+-	docker run ${RM_FLAG} -v `pwd`:/cluster-autoscaler/:Z autoscaling-builder:latest bash -c 'cd /cluster-autoscaler && go test -race ./... ${TAGS_FLAG}'
++	docker run ${RM_FLAG} -v `pwd`:/cluster-autoscaler/:Z autoscaling-builder-$(GOARCH):latest bash -c 'cd /cluster-autoscaler && go test -race ./... ${TAGS_FLAG}'
+
+ .PHONY: all build test-unit clean format execute-release dev-release docker-builder build-in-docker release generate push-image push-manifest
+
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_controller.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_controller.go
+index 567bba5e0..ec6c66e96 100644
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_controller.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_controller.go
+@@ -49,21 +49,25 @@ const (
+ 	// CAPIGroupEnvVar contains the environment variable name which allows overriding defaultCAPIGroup.
+ 	CAPIGroupEnvVar = "CAPI_GROUP"
+ 	// CAPIVersionEnvVar contains the environment variable name which allows overriding the Cluster API group version.
+-	CAPIVersionEnvVar             = "CAPI_VERSION"
+-	resourceNameMachine           = "machines"
+-	resourceNameMachineSet        = "machinesets"
+-	resourceNameMachineDeployment = "machinedeployments"
+-	resourceNameMachinePool       = "machinepools"
+-	failedMachinePrefix           = "failed-machine-"
+-	pendingMachinePrefix          = "pending-machine-"
+-	machineTemplateKind           = "MachineTemplate"
+-	machineDeploymentKind         = "MachineDeployment"
+-	machineSetKind                = "MachineSet"
+-	machinePoolKind               = "MachinePool"
+-	machineKind                   = "Machine"
+-	autoDiscovererTypeClusterAPI  = "clusterapi"
+-	autoDiscovererClusterNameKey  = "clusterName"
+-	autoDiscovererNamespaceKey    = "namespace"
++	CAPIVersionEnvVar                   = "CAPI_VERSION"
++	resourceNameMachine                 = "machines"
++	resourceNameMachineSet              = "machinesets"
++	resourceNameMachineDeployment       = "machinedeployments"
++	resourceNameMachinePool             = "machinepools"
++	failedMachinePrefix                 = "failed-machine-"
++	pendingMachinePrefix                = "pending-machine-"
++	machineTemplateKind                 = "MachineTemplate"
++	machineDeploymentKind               = "MachineDeployment"
++	machineSetKind                      = "MachineSet"
++	machinePoolKind                     = "MachinePool"
++	machineKind                         = "Machine"
++	autoDiscovererTypeClusterAPI        = "clusterapi"
++	autoDiscovererClusterNameKey        = "clusterName"
++	autoDiscovererNamespaceKey          = "namespace"
++	azureMachinePoolMachineApiGroup     = "infrastructure.cluster.x-k8s.io"
++	azureMachinePoolMachineApiVersion   = "v1beta1"
++	azureMachinePoolMachineKind         = "AzureMachinePoolMachine"
++	resourceNameAzureMachinePoolMachine = "azuremachinepoolmachines"
+ )
+
+ // machineController watches for Nodes, Machines, MachinePools, MachineSets, and
+@@ -71,23 +75,26 @@ const (
+ // cluster. Additionally, it adds indices to the node informers to
+ // satisfy lookup by node.Spec.ProviderID.
+ type machineController struct {
+-	workloadInformerFactory     kubeinformers.SharedInformerFactory
+-	managementInformerFactory   dynamicinformer.DynamicSharedInformerFactory
+-	machineDeploymentInformer   informers.GenericInformer
+-	machineInformer             informers.GenericInformer
+-	machineSetInformer          informers.GenericInformer
+-	machinePoolInformer         informers.GenericInformer
+-	nodeInformer                cache.SharedIndexInformer
+-	managementClient            dynamic.Interface
+-	managementScaleClient       scale.ScalesGetter
+-	machineSetResource          schema.GroupVersionResource
+-	machineResource             schema.GroupVersionResource
+-	machinePoolResource         schema.GroupVersionResource
+-	machinePoolsAvailable       bool
+-	machineDeploymentResource   schema.GroupVersionResource
+-	machineDeploymentsAvailable bool
+-	accessLock                  sync.Mutex
+-	autoDiscoverySpecs          []*clusterAPIAutoDiscoveryConfig
++	workloadInformerFactory          kubeinformers.SharedInformerFactory
++	managementInformerFactory        dynamicinformer.DynamicSharedInformerFactory
++	machineDeploymentInformer        informers.GenericInformer
++	machineInformer                  informers.GenericInformer
++	machineSetInformer               informers.GenericInformer
++	machinePoolInformer              informers.GenericInformer
++	azureMachinePoolMachineInformer  informers.GenericInformer
++	nodeInformer                     cache.SharedIndexInformer
++	managementClient                 dynamic.Interface
++	managementScaleClient            scale.ScalesGetter
++	machineSetResource               schema.GroupVersionResource
++	machineResource                  schema.GroupVersionResource
++	machinePoolResource              schema.GroupVersionResource
++	machinePoolsAvailable            bool
++	machineDeploymentResource        schema.GroupVersionResource
++	machineDeploymentsAvailable      bool
++	azureMachinePoolMachineResource  schema.GroupVersionResource
++	azureMachinePoolMachineAvailable bool
++	accessLock                       sync.Mutex
++	autoDiscoverySpecs               []*clusterAPIAutoDiscoveryConfig
+ 	// stopChannel is used for running the shared informers, and for starting
+ 	// informers associated with infrastructure machine templates that are
+ 	// discovered during operation.
+@@ -296,7 +303,17 @@ func (c *machineController) findMachinePoolByProviderID(providerID normalizedPro
+ // findMachineByProviderID finds machine matching providerID. A
+ // DeepCopy() of the object is returned on success.
+ func (c *machineController) findMachineByProviderID(providerID normalizedProviderID) (*unstructured.Unstructured, error) {
+-	objs, err := c.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
++	var objs []interface{}
++	var err error
++
++	// First check for an AzureMachinePoolMachine if the resource type is available.
++	if c.azureMachinePoolMachineAvailable {
++		objs, err = c.azureMachinePoolMachineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
++	}
++	// If no AzureMachinePoolMachine was found, check for a Machine.
++	if len(objs) == 0 {
++		objs, err = c.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
++	}
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -510,24 +527,54 @@ func newMachineController(
+ 		return nil, fmt.Errorf("cannot add node indexer: %v", err)
+ 	}
+
++	var azureMachinePoolInformer informers.GenericInformer
++	gvrAzureMachinePoolMachine := schema.GroupVersionResource{
++		Group:    azureMachinePoolMachineApiGroup,
++		Version:  azureMachinePoolMachineApiVersion,
++		Resource: resourceNameAzureMachinePoolMachine,
++	}
++
++	azureMachinePoolMachineAvailable, err := groupVersionHasResource(managementDiscoveryClient,
++		fmt.Sprintf("%s/%s", azureMachinePoolMachineApiGroup, azureMachinePoolMachineApiVersion), resourceNameAzureMachinePoolMachine)
++	if err != nil {
++		return nil, fmt.Errorf("failed to validate if resource %q is available for group %q: %v",
++			resourceNameAzureMachinePoolMachine, fmt.Sprintf("%s/%s", azureMachinePoolMachineApiGroup, azureMachinePoolMachineApiVersion), err)
++	}
++
++	if azureMachinePoolMachineAvailable {
++		azureMachinePoolInformer = managementInformerFactory.ForResource(gvrAzureMachinePoolMachine)
++		if _, err := azureMachinePoolInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{}); err != nil {
++			return nil, fmt.Errorf("failed to add event handler for resource %q: %v", resourceNameAzureMachinePoolMachine, err)
++		}
++
++		if err := azureMachinePoolInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
++			machineProviderIDIndex: indexMachineByProviderID,
++		}); err != nil {
++			return nil, fmt.Errorf("cannot add azure machine pool machine to machine indexer: %v", err)
++		}
++	}
++
+ 	return &machineController{
+-		autoDiscoverySpecs:          autoDiscoverySpecs,
+-		workloadInformerFactory:     workloadInformerFactory,
+-		managementInformerFactory:   managementInformerFactory,
+-		machineDeploymentInformer:   machineDeploymentInformer,
+-		machineInformer:             machineInformer,
+-		machineSetInformer:          machineSetInformer,
+-		machinePoolInformer:         machinePoolInformer,
+-		nodeInformer:                nodeInformer,
+-		managementClient:            managementClient,
+-		managementScaleClient:       managementScaleClient,
+-		machineSetResource:          gvrMachineSet,
+-		machinePoolResource:         gvrMachinePool,
+-		machinePoolsAvailable:       machinePoolsAvailable,
+-		machineResource:             gvrMachine,
+-		machineDeploymentResource:   gvrMachineDeployment,
+-		machineDeploymentsAvailable: machineDeploymentAvailable,
+-		stopChannel:                 stopChannel,
++		autoDiscoverySpecs:               autoDiscoverySpecs,
++		workloadInformerFactory:          workloadInformerFactory,
++		managementInformerFactory:        managementInformerFactory,
++		machineDeploymentInformer:        machineDeploymentInformer,
++		machineInformer:                  machineInformer,
++		machineSetInformer:               machineSetInformer,
++		machinePoolInformer:              machinePoolInformer,
++		azureMachinePoolMachineInformer:  azureMachinePoolInformer,
++		nodeInformer:                     nodeInformer,
++		managementClient:                 managementClient,
++		managementScaleClient:            managementScaleClient,
++		machineSetResource:               gvrMachineSet,
++		machinePoolResource:              gvrMachinePool,
++		machinePoolsAvailable:            machinePoolsAvailable,
++		machineResource:                  gvrMachine,
++		machineDeploymentResource:        gvrMachineDeployment,
++		machineDeploymentsAvailable:      machineDeploymentAvailable,
++		azureMachinePoolMachineResource:  gvrAzureMachinePoolMachine,
++		azureMachinePoolMachineAvailable: azureMachinePoolMachineAvailable,
++		stopChannel:                      stopChannel,
+ 	}, nil
+ }
+
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup.go
+index d28dc0a14..b42932f50 100644
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup.go
+@@ -17,6 +17,7 @@ limitations under the License.
+ package clusterapi
+
+ import (
++	ctx "context"
+ 	"fmt"
+ 	"math/rand"
+
+@@ -157,6 +158,20 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
+ 			return err
+ 		}
+
++		// Workaround for race condition between scaling down MachinePool (1) and AzureMachinePoolMachine deletion (2)
++		// resulting in up to 2 nodes being deleted. Where:
++		// 1. Scaling down MachinePool deletes a random Machine from the MachinePool
++		// 2. Cluster Autoscaler deletes the correct AzureMachinePoolMachine
++		// If the machine is an AzureMachinePoolMachine, we need to delete the corresponding
++		// AzureMachinePoolMachine resource just before we scale down the AzureMachinePool
++		// This should probably be implemented in CAPI/CAPZ controller to respect ClusterAutoScaler taints
++		if machine.GetKind() == azureMachinePoolMachineKind {
++			err := ng.machineController.managementClient.Resource(ng.machineController.azureMachinePoolMachineResource).Namespace(machine.GetNamespace()).Delete(ctx.TODO(), machine.GetName(), metav1.DeleteOptions{})
++			if err != nil {
++				_ = nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
++				return err
++			}
++		}
+ 		if err := ng.scalableResource.SetSize(replicas - 1); err != nil {
+ 			_ = nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
+ 			return err
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go
+index 4eec0e4bf..ef6d61202 100644
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go
+@@ -137,7 +137,16 @@ func (r unstructuredScalableResource) SetSize(nreplicas int) error {
+ }
+
+ func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstructured.Unstructured) error {
+-	u, err := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(machine.GetNamespace()).Get(context.TODO(), machine.GetName(), metav1.GetOptions{})
++	var gvr schema.GroupVersionResource
++	switch machine.GetKind() {
++	case azureMachinePoolMachineKind:
++		gvr = r.controller.azureMachinePoolMachineResource
++	case machineKind:
++		gvr = r.controller.machineResource
++	default:
++		return fmt.Errorf("unknown machine kind %s", machine.GetKind())
++	}
++	u, err := r.controller.managementClient.Resource(gvr).Namespace(machine.GetNamespace()).Get(context.TODO(), machine.GetName(), metav1.GetOptions{})
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -145,13 +154,22 @@ func (r unstructuredScalableResource) UnmarkMachineForDeletion(machine *unstruct
+ 	annotations := u.GetAnnotations()
+ 	delete(annotations, machineDeleteAnnotationKey)
+ 	u.SetAnnotations(annotations)
+-	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
++	_, updateErr := r.controller.managementClient.Resource(gvr).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
+
+ 	return updateErr
+ }
+
+ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructured.Unstructured) error {
+-	u, err := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(machine.GetNamespace()).Get(context.TODO(), machine.GetName(), metav1.GetOptions{})
++	var gvr schema.GroupVersionResource
++	switch machine.GetKind() {
++	case azureMachinePoolMachineKind:
++		gvr = r.controller.azureMachinePoolMachineResource
++	case machineKind:
++		gvr = r.controller.machineResource
++	default:
++		return fmt.Errorf("unknown machine kind %s", machine.GetKind())
++	}
++	u, err := r.controller.managementClient.Resource(gvr).Namespace(machine.GetNamespace()).Get(context.TODO(), machine.GetName(), metav1.GetOptions{})
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -166,7 +184,7 @@ func (r unstructuredScalableResource) MarkMachineForDeletion(machine *unstructur
+ 	annotations[machineDeleteAnnotationKey] = time.Now().String()
+ 	u.SetAnnotations(annotations)
+
+-	_, updateErr := r.controller.managementClient.Resource(r.controller.machineResource).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
++	_, updateErr := r.controller.managementClient.Resource(gvr).Namespace(u.GetNamespace()).Update(context.TODO(), u, metav1.UpdateOptions{})
+
+ 	return updateErr
+ }
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils.go
+index 58ae58915..abd332136 100644
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils.go
+@@ -201,6 +201,9 @@ func machineSetHasMachineDeploymentOwnerRef(machineSet *unstructured.Unstructure
+ // normalizedProviderString splits s on '/' returning everything after
+ // the last '/'.
+ func normalizedProviderString(s string) normalizedProviderID {
++	if strings.HasPrefix(s, "azure://") {
++		return normalizedProviderID(s)
++	}
+ 	split := strings.Split(s, "/")
+ 	return normalizedProviderID(split[len(split)-1])
+ }
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils_test.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils_test.go
+index c6bafd50a..a80aa1a15 100644
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils_test.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_utils_test.go
+@@ -422,6 +422,14 @@ func TestUtilNormalizedProviderID(t *testing.T) {
+ 		description: "id with / characters",
+ 		providerID:  "aws:////i-12345678",
+ 		expectedID:  "i-12345678",
++	}, {
++		description: "azure standard vm",
++		providerID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachines/control-plane-1cbe5-d4dx7",
++		expectedID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachines/control-plane-1cbe5-d4dx7",
++	}, {
++		description: "azure vmss",
++		providerID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachineScaleSets/vmssName/virtualMachines/0",
++		expectedID:  "azure:///subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resourceGroupName/providers/Microsoft.Compute/virtualMachineScaleSets/vmssName/virtualMachines/0",
+ 	}} {
+ 		t.Run(tc.description, func(t *testing.T) {
+ 			actualID := normalizedProviderString(tc.providerID)

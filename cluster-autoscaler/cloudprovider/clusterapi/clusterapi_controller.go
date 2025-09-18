@@ -95,6 +95,8 @@ type machineController struct {
 	// informers associated with infrastructure machine templates that are
 	// discovered during operation.
 	stopChannel <-chan struct{}
+	// azureIntegration provides Azure-specific functionality when available
+	azureIntegration *AzureIntegration
 }
 
 func indexMachinePoolByProviderID(obj interface{}) ([]string, error) {
@@ -300,6 +302,18 @@ func (c *machineController) findMachinePoolByProviderID(providerID normalizedPro
 // findMachineByProviderID finds machine matching providerID. A
 // DeepCopy() of the object is returned on success.
 func (c *machineController) findMachineByProviderID(providerID normalizedProviderID) (*unstructured.Unstructured, error) {
+	// Try Azure lookup first if available
+	if c.azureIntegration != nil {
+		machine, err := c.azureIntegration.lookup.FindMachineByProviderID(providerID)
+		if err != nil {
+			return nil, err
+		}
+		if machine != nil {
+			return machine, nil
+		}
+	}
+
+	// Fallback to existing logic
 	objs, err := c.machineInformer.Informer().GetIndexer().ByIndex(machineProviderIDIndex, string(providerID))
 	if err != nil {
 		return nil, err
@@ -551,7 +565,7 @@ func newMachineController(
 		return nil, fmt.Errorf("cannot add node indexer: %v", err)
 	}
 
-	return &machineController{
+	controller := &machineController{
 		autoDiscoverySpecs:          autoDiscoverySpecs,
 		workloadInformerFactory:     workloadInformerFactory,
 		managementInformerFactory:   managementInformerFactory,
@@ -570,7 +584,17 @@ func newMachineController(
 		machineDeploymentResource:   gvrMachineDeployment,
 		machineDeploymentsAvailable: machineDeploymentAvailable,
 		stopChannel:                 stopChannel,
-	}, nil
+	}
+
+	// Add Azure integration if available
+	azureIntegration, err := NewAzureIntegration(controller, managementInformerFactory, managementDiscoveryClient)
+	if err != nil {
+		klog.V(4).Infof("Azure integration not available: %v", err)
+	} else {
+		controller.azureIntegration = azureIntegration
+	}
+
+	return controller, nil
 }
 
 func groupVersionHasResource(client discovery.DiscoveryInterface, groupVersion, resourceName string) (bool, error) {
