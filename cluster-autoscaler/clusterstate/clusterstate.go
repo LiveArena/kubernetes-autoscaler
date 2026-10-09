@@ -1014,6 +1014,7 @@ func (csr *ClusterStateRegistry) GetUpcomingNodes() (upcomingCounts map[string]i
 		ar := csr.acceptableRanges[id]
 		// newNodes is the number of nodes that
 		newNodes := ar.CurrentTarget - (len(readiness.Ready) + len(readiness.Unready) + len(readiness.LongUnregistered))
+		newNodes, registered := applyUpcomingCapacityPolicy(nodeGroup, newNodes, readiness.NotStarted)
 		if newNodes <= 0 {
 			// Negative value is unlikely but theoretically possible.
 			continue
@@ -1023,7 +1024,7 @@ func (csr *ClusterStateRegistry) GetUpcomingNodes() (upcomingCounts map[string]i
 		// but haven't registered with k8s yet, and instances that haven't even come up on the cloud provider side yet (but are reflected in the target
 		// size). The first category is categorized as NotStarted in readiness, the other two aren't registered with k8s, so they shouldn't be
 		// included.
-		registeredNodeNames[id] = readiness.NotStarted
+		registeredNodeNames[id] = registered
 	}
 	return upcomingCounts, registeredNodeNames
 }
@@ -1132,6 +1133,9 @@ func (csr *ClusterStateRegistry) handleInstanceCreationErrorsForNodeGroup(
 	previousInstances []cloudprovider.Instance,
 	currentTime time.Time) {
 
+	if cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).RetainTarget {
+		return
+	}
 	_, currentUniqueErrorMessagesForErrorCode, currentErrorCodeToInstance := csr.buildInstanceToErrorCodeMappings(currentInstances)
 	previousInstanceToErrorCode, _, _ := csr.buildInstanceToErrorCodeMappings(previousInstances)
 

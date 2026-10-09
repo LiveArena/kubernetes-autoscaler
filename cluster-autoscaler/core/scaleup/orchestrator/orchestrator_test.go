@@ -34,6 +34,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup/equivalence"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup/resource"
 	. "k8s.io/autoscaler/cluster-autoscaler/core/test"
 	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
@@ -65,6 +66,55 @@ var defaultOptions = config.AutoscalingOptions{
 	MaxMemoryTotal: config.DefaultMaxClusterMemory * units.GiB,
 	MinCoresTotal:  0,
 	MinMemoryTotal: 0,
+}
+
+type primaryFitTestGroup struct {
+	cloudprovider.NodeGroup
+	policy cloudprovider.NodeGroupCapacityPolicy
+	reason string
+}
+
+func (group *primaryFitTestGroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
+	return group.policy
+}
+
+func (group *primaryFitTestGroup) ResetPrimaryFitFallback() { group.reason = "" }
+
+func (group *primaryFitTestGroup) AllowPrimaryFitFallback(reason string) error {
+	group.reason = reason
+	return nil
+}
+
+func TestPrimaryResourceLimitsPermitSecondaryFitExceptionsOnlyWhileEligible(t *testing.T) {
+	provider := testprovider.NewTestCloudProviderBuilder().WithOnScaleUp(func(string, int) error { return nil }).Build()
+	provider.AddNodeGroup("primary", 0, 10, 1)
+	provider.AddNodeGroup("secondary", 0, 10, 1)
+	now := time.Now()
+	nodes := []*apiv1.Node{BuildTestNode("primary-ready", 4000, 10000), BuildTestNode("secondary-ready", 1000, 10000)}
+	for index, role := range []string{"primary", "secondary"} {
+		SetNodeReadyState(nodes[index], true, now.Add(-time.Minute))
+		provider.AddNode(role, nodes[index])
+	}
+	listers := kube_util.NewListerRegistry(nil, nil, kube_util.NewTestPodLister(nil), nil, nil, nil, nil, nil, nil)
+	ctx, err := NewScaleTestAutoscalingContext(defaultOptions, &fake.Clientset{}, listers, provider, nil, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(nodes, nil, nil))
+	templates := map[string]*framework.NodeInfo{"primary": framework.NewTestNodeInfo(BuildTestNode("primary-template", 4000, 10000)), "secondary": framework.NewTestNodeInfo(BuildTestNode("secondary-template", 1000, 10000))}
+	registry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, ctx.LogRecorder, NewBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 15 * time.Minute}), asyncnodegroups.NewDefaultAsyncNodeGroupStateChecker())
+	assert.NoError(t, registry.UpdateNodes(nodes, templates, now))
+	orchestrator := New()
+	orchestrator.Initialize(&ctx, processors.DefaultProcessors(defaultOptions), registry, newEstimatorBuilder(), taints.TaintConfig{})
+	secondary := &primaryFitTestGroup{NodeGroup: provider.GetNodeGroup("secondary"), policy: cloudprovider.NodeGroupCapacityPolicy{ConsiderPrimaryUnfit: true, PrimaryNodeGroupID: "primary"}}
+	groups := []cloudprovider.NodeGroup{provider.GetNodeGroup("primary"), secondary}
+	pods := equivalence.BuildPodGroups([]*apiv1.Pod{BuildTestPod("demand", 500, 100)})
+	orchestrator.preparePrimaryFitFallback(groups, templates, resource.Limits{cloudprovider.ResourceNameCores: 2}, pods, now)
+	assert.Contains(t, secondary.reason, "resource limits")
+	assert.Nil(t, orchestrator.IsNodeGroupResourceExceeded(resource.Limits{cloudprovider.ResourceNameCores: 2}, secondary, templates["secondary"], 1))
+	orchestrator.preparePrimaryFitFallback(groups, templates, resource.Limits{cloudprovider.ResourceNameCores: 10}, pods, now)
+	assert.Empty(t, secondary.reason, "restored primary fit must clear prior permission")
+	secondary.policy.ConsiderPrimaryUnfit = false
+	orchestrator.preparePrimaryFitFallback(groups, templates, resource.Limits{cloudprovider.ResourceNameCores: 2}, pods, now)
+	assert.Empty(t, secondary.reason, "ineligible pairs cannot bypass admission")
 }
 
 // Scale up scenarios.

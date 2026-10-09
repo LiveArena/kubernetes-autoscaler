@@ -465,6 +465,13 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) caerrors.AutoscalerErr
 	for _, ngRegisteredUpcoming := range registeredUpcoming {
 		allRegisteredUpcoming = append(allRegisteredUpcoming, ngRegisteredUpcoming...)
 	}
+	for _, group := range a.CloudProvider.NodeGroups() {
+		for nodeName, failed := range cloudprovider.GetNodeGroupCapacityPolicy(group).FailedRegisteredNodes {
+			if failed {
+				allRegisteredUpcoming = append(allRegisteredUpcoming, nodeName)
+			}
+		}
+	}
 	allNodes = subtractNodesByName(allNodes, allRegisteredUpcoming)
 	// Remove the nodes from the snapshot as well so that the state is consistent.
 	for _, notStartedNodeName := range allRegisteredUpcoming {
@@ -730,6 +737,9 @@ func (a *StaticAutoscaler) isScaleDownInCooldown(currentTime time.Time) bool {
 func fixNodeGroupSize(context *context.AutoscalingContext, clusterStateRegistry *clusterstate.ClusterStateRegistry, currentTime time.Time) (bool, error) {
 	fixed := false
 	for _, nodeGroup := range context.CloudProvider.NodeGroups() {
+		if cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).RetainTarget {
+			continue
+		}
 		incorrectSize := clusterStateRegistry.GetIncorrectNodeGroupSize(nodeGroup.Id())
 		if incorrectSize == nil {
 			continue
@@ -769,6 +779,9 @@ func (a *StaticAutoscaler) removeOldUnregisteredNodes(allUnregisteredNodes []clu
 	removedAny := false
 	for nodeGroupId, unregisteredNodesToDelete := range unregisteredNodesToRemove {
 		nodeGroup := nodeGroups[nodeGroupId]
+		if cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).RetainTarget {
+			continue
+		}
 
 		klog.V(0).Infof("Removing %v unregistered nodes for node group %v", len(unregisteredNodesToDelete), nodeGroupId)
 		if !a.ForceDeleteLongUnregisteredNodes {
