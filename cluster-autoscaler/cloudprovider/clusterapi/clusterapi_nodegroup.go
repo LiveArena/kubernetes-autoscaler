@@ -16,6 +16,8 @@ limitations under the License.
 
 package clusterapi
 
+import "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
+
 import (
 	"fmt"
 	"math/rand"
@@ -65,6 +67,9 @@ func (ng *nodegroup) MaxSize() int {
 // (new nodes finish startup and registration or removed nodes are
 // deleted completely). Implementation required.
 func (ng *nodegroup) TargetSize() (int, error) {
+	if ng.GetCapacityPolicy().ExpectedTarget != nil {
+		return ng.scalableResource.Replicas()
+	}
 	replicas, found, err := unstructured.NestedInt64(ng.scalableResource.unstructured.Object, "spec", "replicas")
 	if err != nil {
 		return 0, errors.Wrap(err, "error getting replica count")
@@ -82,6 +87,9 @@ func (ng *nodegroup) TargetSize() (int, error) {
 func (ng *nodegroup) IncreaseSize(delta int) error {
 	if delta <= 0 {
 		return fmt.Errorf("size increase must be positive")
+	}
+	if handled, err := ng.increaseSizeWithFailoverPolicy(delta); handled {
+		return err
 	}
 
 	size, err := ng.scalableResource.Replicas()
@@ -200,6 +208,9 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 	if delta >= 0 {
 		return fmt.Errorf("size decrease must be negative")
 	}
+	if ng.GetCapacityPolicy().RetainTarget {
+		return fmt.Errorf("retaining failed requested capacity for CAPZ retry")
+	}
 
 	size, err := ng.scalableResource.Replicas()
 	if err != nil {
@@ -235,6 +246,13 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 }
 
 // Id returns an unique identifier of the node group.
+func (ng *nodegroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
+	if ng.machineController.failover != nil {
+		return ng.machineController.failover.Capacity(ng)
+	}
+	return failover.DisabledCapacity(ng.scalableResource.unstructured)
+}
+
 func (ng *nodegroup) Id() string {
 	return ng.scalableResource.ID()
 }

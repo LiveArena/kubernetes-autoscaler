@@ -657,6 +657,90 @@ func TestUpcomingNodes(t *testing.T) {
 	assert.Empty(t, upcomingRegistered["ng5"])
 }
 
+type capacityPolicyTestProvider struct {
+	*testprovider.TestCloudProvider
+	policy cloudprovider.NodeGroupCapacityPolicy
+}
+
+func (provider *capacityPolicyTestProvider) NodeGroups() []cloudprovider.NodeGroup {
+	groups := provider.TestCloudProvider.NodeGroups()
+	for index, group := range groups {
+		groups[index] = capacityPolicyTestNodeGroup{NodeGroup: group, policy: provider.policy}
+	}
+	return groups
+}
+
+type capacityPolicyTestNodeGroup struct {
+	cloudprovider.NodeGroup
+	policy cloudprovider.NodeGroupCapacityPolicy
+}
+
+func (group capacityPolicyTestNodeGroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
+	return group.policy
+}
+
+func TestUpcomingCapacityExcludesFailedGapsAndCreditsOnlyViableBoundedArrivals(t *testing.T) {
+	tests := []struct {
+		name            string
+		policy          cloudprovider.NodeGroupCapacityPolicy
+		registered      bool
+		extraRegistered bool
+		target          int
+		wantUpcoming    int
+		wantRegistered  []string
+	}{
+		{name: "HealthyRequestedGapRemainsUpcomingCapacity", wantUpcoming: 2},
+		{name: "FailedUnregisteredGapIsNotUpcomingCapacity", policy: cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true}},
+		{name: "FreshPrimaryTrialCreditsOnlyItsReliableIncrement", policy: cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true, ReliableUnregistered: 1}, wantUpcoming: 1, wantRegistered: []string{}},
+		{name: "ReliableCreditsCannotExceedTheTargetGap", policy: cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true, ReliableUnregistered: 10}, wantUpcoming: 2, wantRegistered: []string{}},
+		{name: "HealthyRegisteredArrivalRemainsUpcomingCapacity", registered: true, wantUpcoming: 2, wantRegistered: []string{"arriving"}},
+		{name: "ViableRegisteredArrivalSurvivesFailedGapFiltering", policy: cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true}, registered: true, wantUpcoming: 1, wantRegistered: []string{"arriving"}},
+		{name: "FailedRegisteredArrivalIsNotUpcomingCapacity", policy: cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true, FailedRegisteredNodes: map[string]bool{"arriving": true}}, registered: true},
+		{name: "RegisteredExclusionsCannotExceedTheEffectiveGap", policy: cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true}, registered: true, extraRegistered: true, target: 2, wantUpcoming: 1, wantRegistered: []string{"arriving"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+			baseProvider := testprovider.NewTestCloudProviderBuilder().Build()
+			target := test.target
+			if target == 0 {
+				target = 3
+			}
+			baseProvider.AddNodeGroup("primary", 1, 10, target)
+			ready := BuildTestNode("ready", 1000, 1000)
+			SetNodeReadyState(ready, true, now.Add(-time.Minute))
+			baseProvider.AddNode("primary", ready)
+			nodes := []*apiv1.Node{ready}
+			if test.registered {
+				arriving := BuildTestNode("arriving", 1000, 1000)
+				SetNodeReadyState(arriving, false, now.Add(-time.Minute))
+				arriving.CreationTimestamp = metav1.NewTime(now.Add(-time.Minute))
+				baseProvider.AddNode("primary", arriving)
+				nodes = append(nodes, arriving)
+				if test.extraRegistered {
+					extra := arriving.DeepCopy()
+					extra.Name = "arriving-extra"
+					baseProvider.AddNode("primary", extra)
+					nodes = append(nodes, extra)
+				}
+			}
+			provider := &capacityPolicyTestProvider{TestCloudProvider: baseProvider, policy: test.policy}
+			recorder, _ := utils.NewStatusMapRecorder(&fake.Clientset{}, "kube-system", kube_record.NewFakeRecorder(5), false, "status")
+			registry := NewClusterStateRegistry(provider, ClusterStateRegistryConfig{
+				MaxTotalUnreadyPercentage: 100,
+				OkTotalUnreadyCount:       10,
+			}, recorder, newBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 45 * time.Minute}), asyncnodegroups.NewDefaultAsyncNodeGroupStateChecker())
+			assert.NoError(t, registry.UpdateNodes(nodes, nil, now))
+			counts, registered := registry.GetUpcomingNodes()
+			assert.Equal(t, test.wantUpcoming, counts["primary"])
+			assert.Equal(t, test.wantRegistered, registered["primary"])
+			currentTarget, err := baseProvider.GetNodeGroup("primary").TargetSize()
+			assert.NoError(t, err)
+			assert.Equal(t, target, currentTarget)
+		})
+	}
+}
+
 func TestTaintBasedNodeDeletion(t *testing.T) {
 	// Create a new Cloud Provider that does not implement the HasInstance check
 	// it will return the ErrNotImplemented error instead.
