@@ -1,3 +1,19 @@
+/*
+Copyright 2026 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package failover
 
 import (
@@ -20,6 +36,7 @@ func (pair *Pair) ReconcileRequestTargets(primaryTarget, secondaryTarget int) er
 	}
 	return nil
 }
+
 // AcceptPrimaryFailure grants fallback allowance for newly failed requested capacity.
 func (pair *Pair) AcceptPrimaryFailure(observation FailureObservation, alreadyFailed bool, target, ready int) {
 	if request := pair.PrimaryRequest; request != nil {
@@ -33,6 +50,7 @@ func (pair *Pair) AcceptPrimaryFailure(observation FailureObservation, alreadyFa
 		pair.FallbackAllowance = max(0, target-ready)
 	}
 }
+
 // CompletePrimaryArrival clears a fulfilled trial and unused failure-derived secondary intent.
 func (pair *Pair) CompletePrimaryArrival(ready []string, target int) {
 	request := pair.PrimaryRequest
@@ -44,6 +62,7 @@ func (pair *Pair) CompletePrimaryArrival(ready []string, target int) {
 		}
 	}
 }
+
 // RequestAdmission computes role-specific growth blocking, incoming credit and request limits.
 func (pair *Pair) RequestAdmission(role string, primaryTarget, primaryMaximum int, frozen bool) (blocked bool, reliable, limit int) {
 	if role == "secondary" {
@@ -66,6 +85,7 @@ func (pair *Pair) RequestAdmission(role string, primaryTarget, primaryMaximum in
 	}
 	return pair.FallbackAllowance > 0 || pair.SecondaryRequest != nil || primaryTarget >= primaryMaximum, 0, 0
 }
+
 // ReliablePrimaryGap subtracts new Ready and viable registered arrivals from the trial increment.
 func (pair *Pair) ReliablePrimaryGap(primary *Member) int {
 	request := pair.PrimaryRequest

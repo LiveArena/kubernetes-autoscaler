@@ -1,3 +1,19 @@
+/*
+Copyright 2026 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package failover
 
 import (
@@ -35,6 +51,7 @@ func TerminalAMPMFailure(machine *unstructured.Unstructured) (FailureObservation
 	}
 	return FailureObservation{}, false
 }
+
 // ReadyFingerprint hashes Ready identities independently of their input order.
 func ReadyFingerprint(ready []string) string {
 	identities := append([]string(nil), ready...)
@@ -42,6 +59,7 @@ func ReadyFingerprint(ready []string) string {
 	encoded, _ := json.Marshal(identities)
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
+
 // ObserveFailure advances the role's failure watermark only for a fresh attempt.
 func (role *Role) ObserveFailure(observation FailureObservation, ready []string, now time.Time, scanInterval time.Duration) bool {
 	if observation.UID == "" || observation.Created.IsZero() || observation.UID == role.LastAttemptUID || observation.Created.Before(&role.LastAttemptCreated) {
