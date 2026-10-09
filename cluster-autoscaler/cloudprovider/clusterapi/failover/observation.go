@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// FailureObservation identifies a terminal AMPM attempt and its AzureMachinePool owner.
 type FailureObservation struct {
 	Namespace string
 	OwnerName string
@@ -20,6 +21,7 @@ type FailureObservation struct {
 	Created   metav1.Time
 }
 
+// TerminalAMPMFailure extracts a nondeleting Failed attempt with usable owner identity.
 func TerminalAMPMFailure(machine *unstructured.Unstructured) (FailureObservation, bool) {
 	state, _, err := unstructured.NestedString(machine.Object, "status", "provisioningState")
 	created := machine.GetCreationTimestamp()
@@ -33,12 +35,14 @@ func TerminalAMPMFailure(machine *unstructured.Unstructured) (FailureObservation
 	}
 	return FailureObservation{}, false
 }
+// ReadyFingerprint hashes Ready identities independently of their input order.
 func ReadyFingerprint(ready []string) string {
 	identities := append([]string(nil), ready...)
 	sort.Strings(identities)
 	encoded, _ := json.Marshal(identities)
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
+// ObserveFailure advances the role's failure watermark only for a fresh attempt.
 func (role *Role) ObserveFailure(observation FailureObservation, ready []string, now time.Time, scanInterval time.Duration) bool {
 	if observation.UID == "" || observation.Created.IsZero() || observation.UID == role.LastAttemptUID || observation.Created.Before(&role.LastAttemptCreated) {
 		return false

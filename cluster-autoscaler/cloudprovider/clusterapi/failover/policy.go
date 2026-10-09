@@ -13,6 +13,7 @@ import (
 	"time"
 )
 
+// Policy reconciles durable pair state and publishes capacity and admission snapshots.
 type Policy struct {
 	sync.RWMutex
 	Environment       Environment
@@ -33,6 +34,7 @@ type Policy struct {
 	Handler           cache.ResourceEventHandlerRegistration
 }
 
+// Observe retains the newest terminal failure per AMP owner in a bounded buffer.
 func (policy *Policy) Observe(object interface{}) {
 	machine, ok := object.(*unstructured.Unstructured)
 	if !ok {
@@ -54,6 +56,7 @@ func (policy *Policy) Observe(object interface{}) {
 		policy.Observations[key] = observation
 	}
 }
+// Capacity returns the group's current snapshot, including eligible scan-local fit exceptions.
 func (policy *Policy) Capacity(group Group) cloudprovider.NodeGroupCapacityPolicy {
 	policy.RLock()
 	defer policy.RUnlock()
@@ -70,6 +73,7 @@ func (policy *Policy) Capacity(group Group) cloudprovider.NodeGroupCapacityPolic
 	}
 	return cloudprovider.NodeGroupCapacityPolicy{}
 }
+// AssertWriter verifies local writer activity and the group's Cluster owner reference.
 func (policy *Policy) AssertWriter(ctx context.Context, group Group) error {
 	if policy.Stopped.Load() {
 		return fmt.Errorf("autoscaler failover writer is stopped")

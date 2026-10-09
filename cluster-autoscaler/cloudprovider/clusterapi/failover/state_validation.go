@@ -5,6 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// Validate checks the Cluster UID, schema and per-pair state invariants.
 func (state *State) Validate(clusterUID types.UID) error {
 	if state.Version != StateVersion || state.ClusterUID != clusterUID || state.Pairs == nil {
 		return fmt.Errorf("unsupported, stale, or unbounded failover state")

@@ -8,11 +8,13 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// SelectionReason adds bounded pair, role and physical-identity context to a rejection.
 func SelectionReason(group Group, reason error) string {
 	annotations := group.Object().GetAnnotations()
 	message := fmt.Sprintf("failover pair %q role %q pool %s uid %s: %v", annotations[PairKey], annotations[RoleKey], group.Object().GetName(), group.Object().GetUID(), reason)
 	return message[:min(len(message), 1024)]
 }
+// BlockMembers closes growth admission and fit exceptions without resetting capacity snapshots.
 func BlockMembers(candidates map[string]*Member, policies map[string]cloudprovider.NodeGroupCapacityPolicy, reason error) {
 	for _, member := range candidates {
 		snapshot := policies[member.Group.Id()]
@@ -22,6 +24,7 @@ func BlockMembers(candidates map[string]*Member, policies map[string]cloudprovid
 		policies[member.Group.Id()] = snapshot
 	}
 }
+// ConfiguredMembers selects live configured pairs and blocks unverifiable configurations.
 func (policy *Policy) ConfiguredMembers(ctx context.Context, available map[string]map[string]*Member, policies map[string]cloudprovider.NodeGroupCapacityPolicy) map[string]map[string]map[string]*Member {
 	result := map[string]map[string]map[string]*Member{}
 	for key, candidates := range available {

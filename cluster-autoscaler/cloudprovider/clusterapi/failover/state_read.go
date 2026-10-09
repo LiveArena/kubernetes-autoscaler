@@ -9,6 +9,7 @@ import (
 	strictjson "sigs.k8s.io/json"
 )
 
+// Load validates stored Cluster state or returns unsaved empty state when the object is absent.
 func (store *Store) Load(ctx context.Context, cluster *unstructured.Unstructured) (*State, *unstructured.Unstructured, error) {
 	if cluster.GetUID() == "" || cluster.GetNamespace() == "" {
 		return nil, nil, fmt.Errorf("failover requires a namespaced Cluster with a UID")

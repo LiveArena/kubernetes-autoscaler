@@ -4,6 +4,7 @@ import (
 	"fmt"
 )
 
+// ReconcileRequestTargets validates durable intents and retires committed secondary requests.
 func (pair *Pair) ReconcileRequestTargets(primaryTarget, secondaryTarget int) error {
 	for _, observation := range []struct {
 		request *Request
@@ -19,6 +20,7 @@ func (pair *Pair) ReconcileRequestTargets(primaryTarget, secondaryTarget int) er
 	}
 	return nil
 }
+// AcceptPrimaryFailure grants fallback allowance for newly failed requested capacity.
 func (pair *Pair) AcceptPrimaryFailure(observation FailureObservation, alreadyFailed bool, target, ready int) {
 	if request := pair.PrimaryRequest; request != nil {
 		if target == request.ToTarget && observation.UID != request.FailureUIDAtStart && observation.Created.Time.After(request.Started.Time) {
@@ -31,6 +33,7 @@ func (pair *Pair) AcceptPrimaryFailure(observation FailureObservation, alreadyFa
 		pair.FallbackAllowance = max(0, target-ready)
 	}
 }
+// CompletePrimaryArrival clears a fulfilled trial and unused failure-derived secondary intent.
 func (pair *Pair) CompletePrimaryArrival(ready []string, target int) {
 	request := pair.PrimaryRequest
 	if request != nil && target == request.ToTarget && len(ready) >= request.ReadyAtStart+request.ToTarget-request.FromTarget && ReadyFingerprint(ready) != request.ReadyFingerprint {
@@ -41,6 +44,7 @@ func (pair *Pair) CompletePrimaryArrival(ready []string, target int) {
 		}
 	}
 }
+// RequestAdmission computes role-specific growth blocking, incoming credit and request limits.
 func (pair *Pair) RequestAdmission(role string, primaryTarget, primaryMaximum int, frozen bool) (blocked bool, reliable, limit int) {
 	if role == "secondary" {
 		if frozen || pair.Secondary.Failed || pair.PrimaryRequest != nil && (pair.SecondaryRequest == nil || pair.SecondaryRequest.PrimaryUnavailableReason == "") {
@@ -62,6 +66,7 @@ func (pair *Pair) RequestAdmission(role string, primaryTarget, primaryMaximum in
 	}
 	return pair.FallbackAllowance > 0 || pair.SecondaryRequest != nil || primaryTarget >= primaryMaximum, 0, 0
 }
+// ReliablePrimaryGap subtracts new Ready and viable registered arrivals from the trial increment.
 func (pair *Pair) ReliablePrimaryGap(primary *Member) int {
 	request := pair.PrimaryRequest
 	if request == nil || primary.Target != request.ToTarget {

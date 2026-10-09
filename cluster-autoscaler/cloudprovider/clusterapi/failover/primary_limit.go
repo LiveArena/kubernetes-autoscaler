@@ -9,6 +9,7 @@ import (
 	"strconv"
 )
 
+// PrimaryAtMaximum verifies the selected primary identity and compares its live target with its maximum.
 func (policy *Policy) PrimaryAtMaximum(ctx context.Context, cluster *unstructured.Unstructured, pair string, uid types.UID) (bool, error) {
 	groups, err := policy.Environment.NodeGroups()
 	if err != nil {

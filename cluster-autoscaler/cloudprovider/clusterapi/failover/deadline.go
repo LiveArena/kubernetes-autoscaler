@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// Request records a durable replica increment and its reconciliation evidence.
 type Request struct {
 	FromTarget               int          `json:"fromTarget"`
 	ToTarget                 int          `json:"toTarget"`
@@ -18,6 +19,7 @@ type Request struct {
 	PrimaryUnavailableReason string       `json:"primaryUnavailableReason,omitempty"`
 }
 
+// ExpirePrimaryTrial converts an expired primary trial at its requested target into fallback allowance.
 func (pair *Pair) ExpirePrimaryTrial(primary *Member, now time.Time) bool {
 	request := pair.PrimaryRequest
 	if request == nil || request.Deadline == nil || primary.Target != request.ToTarget || now.Before(request.Deadline.Time) {
@@ -33,6 +35,7 @@ func (pair *Pair) ExpirePrimaryTrial(primary *Member, now time.Time) bool {
 	pair.Primary.ReadyFingerprintAtFailure = ReadyFingerprint(primary.Ready)
 	return true
 }
+// PrimaryTrialDuration returns the group's positive configured provisioning timeout.
 func (policy *Policy) PrimaryTrialDuration(group Group) (time.Duration, error) {
 	options, err := group.GetOptions(policy.NodeGroupDefaults)
 	if err != nil {

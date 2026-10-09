@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// PrepareScaleRequest revalidates durable admission and records intent before a scale write.
 func (policy *Policy) PrepareScaleRequest(group Group, delta int) error {
 	if !policy.BeginWriterOperation() {
 		return fmt.Errorf("failover writer has stopped")

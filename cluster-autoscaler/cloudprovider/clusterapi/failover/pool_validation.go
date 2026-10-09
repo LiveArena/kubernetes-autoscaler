@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// AssertCurrentPool verifies that the group's live identity still matches explicit configuration.
 func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error {
 	member, err := policy.Member(ctx, group)
 	if err != nil {
@@ -37,6 +38,7 @@ func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error 
 	}
 	return nil
 }
+// ResolveConfiguredPools validates all selected roles and returns their live MachinePool UIDs.
 func (policy *Policy) ResolveConfiguredPools(ctx context.Context, cluster *unstructured.Unstructured, configuration *Configuration) (map[string]types.UID, error) {
 	resolved := map[string]types.UID{}
 	resource := policy.Store.Client.Resource(policy.Environment.MachinePoolResource()).Namespace(cluster.GetNamespace())

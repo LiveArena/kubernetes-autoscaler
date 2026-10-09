@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// ReconcileReadiness applies positive-evidence recovery and bounded secondary rechecks.
 func (pair *Pair) ReconcileReadiness(primaryReady, secondaryReady []string, primaryTarget, secondaryTarget int, newPrimaryFailure bool, now time.Time) {
 	pair.Primary.ObservedTarget = primaryTarget
 	pair.Secondary.ObservedTarget = secondaryTarget

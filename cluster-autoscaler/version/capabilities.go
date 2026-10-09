@@ -8,9 +8,13 @@ import (
 	"strconv"
 )
 
+// CapabilitiesAPIVersion identifies the capability-report JSON contract.
 const CapabilitiesAPIVersion = "aiproducer.com/autoscaler-capabilities/v1"
+
+// AzureMachinePoolFailoverCapability identifies compiled Azure MachinePool failover support.
 const AzureMachinePoolFailoverCapability = "azure-machinepool-failover-v1"
 
+// CapabilityReport separates compiled support, source metadata and configured runtime settings.
 type CapabilityReport struct {
 	APIVersion   string                  `json:"apiVersion"`
 	Version      string                  `json:"version"`
@@ -19,6 +23,7 @@ type CapabilityReport struct {
 	Configured   CapabilityConfiguration `json:"configured"`
 }
 
+// CapabilitySource reports embedded build metadata, which may be incomplete or dirty.
 type CapabilitySource struct {
 	Status    string `json:"status"`
 	VCS       string `json:"vcs"`
@@ -27,6 +32,7 @@ type CapabilitySource struct {
 	GoVersion string `json:"goVersion"`
 }
 
+// CapabilityConfiguration describes supplied settings without evaluating runtime readiness.
 type CapabilityConfiguration struct {
 	CloudProvider  string `json:"cloudProvider"`
 	FailoverMode   string `json:"azureMachinePoolFailoverMode"`
@@ -34,6 +40,7 @@ type CapabilityConfiguration struct {
 	Readiness      string `json:"readiness"`
 }
 
+// NewCapabilityReport reports compiled support and supplied settings without connecting to Kubernetes.
 func NewCapabilityReport(provider, mode string, leaderElection bool) CapabilityReport {
 	build, _ := debug.ReadBuildInfo()
 	return capabilityReport(build, provider, mode, leaderElection)
@@ -69,10 +76,12 @@ func capabilityReport(build *debug.BuildInfo, provider, mode string, leaderElect
 	return report
 }
 
+// WriteCapabilities encodes the capability report as JSON.
 func WriteCapabilities(writer io.Writer, report CapabilityReport) error {
 	return json.NewEncoder(writer).Encode(report)
 }
 
+// CapabilityHandler serves the report as non-cacheable JSON for GET requests only.
 func CapabilityHandler(report CapabilityReport) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {

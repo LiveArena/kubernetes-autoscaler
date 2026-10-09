@@ -8,6 +8,8 @@ import (
 	"k8s.io/client-go/scale"
 )
 
+// IncreaseSize handles policy-managed increments after live identity, limit and durable-intent checks.
+// The returned boolean indicates whether the policy handled the request.
 func (writer *Policy) IncreaseSize(group Group, delta int, scales scale.ScalesGetter) (bool, error) {
 	policy := writer.Capacity(group)
 	if policy.ScaleUpBlocked {

@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// Member combines a validated pool identity, current target and workload capacity observations.
 type Member struct {
 	Group           Group
 	Cluster         *unstructured.Unstructured
@@ -19,6 +20,7 @@ type Member struct {
 	Target          int
 }
 
+// Member resolves live ownership and records usable workload nodes for a discovered group.
 func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) {
 	pool := group.Object()
 	if pool.GetKind() != MachinePoolKind || pool.GetUID() == "" || !pool.GetDeletionTimestamp().IsZero() {

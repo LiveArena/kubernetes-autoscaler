@@ -54,15 +54,15 @@ func (ng *nodegroup) increaseSizeWithFailoverPolicy(delta int) (bool, error) {
 	}
 	return writer.IncreaseSize(ng, delta, ng.machineController.managementScaleClient)
 }
-func (group *nodegroup) ResetPrimaryFitFallback() {
-	if policy := group.machineController.failover; policy != nil {
-		policy.ResetPrimaryFitFallback(group.Id())
+func (ng *nodegroup) ResetPrimaryFitFallback() {
+	if policy := ng.machineController.failover; policy != nil {
+		policy.ResetPrimaryFitFallback(ng.Id())
 	}
 }
-func (group *nodegroup) AllowPrimaryFitFallback(reason string) error {
-	policy := group.machineController.failover
+func (ng *nodegroup) AllowPrimaryFitFallback(reason string) error {
+	policy := ng.machineController.failover
 	if policy == nil || reason == "" {
 		return fmt.Errorf("primary-fit fallback is disabled")
 	}
-	return policy.AllowPrimaryFitFallback(group.Id(), reason)
+	return policy.AllowPrimaryFitFallback(ng.Id(), reason)
 }

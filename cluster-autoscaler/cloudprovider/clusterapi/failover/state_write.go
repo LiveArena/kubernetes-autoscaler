@@ -11,6 +11,8 @@ import (
 	"k8s.io/client-go/util/retry"
 )
 
+// Reconcile applies a validated state update and retries conflicting management API writes.
+// The update callback may run more than once when a conflict is retried.
 func (store *Store) Reconcile(ctx context.Context, cluster *unstructured.Unstructured, update func(*State) error) (*State, error) {
 	var result *State
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {

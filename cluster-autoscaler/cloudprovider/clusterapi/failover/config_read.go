@@ -10,6 +10,7 @@ import (
 	"strings"
 )
 
+// ReadConfiguration reads and validates the exact-name Cluster-owned configuration.
 func ReadConfiguration(ctx context.Context, client dynamic.Interface, cluster *unstructured.Unstructured) (*Configuration, error) {
 	object, err := client.Resource(ConfigMaps).Namespace(cluster.GetNamespace()).Get(ctx, cluster.GetName()+"-autoscaler-failover-config", metav1.GetOptions{})
 	if err != nil {

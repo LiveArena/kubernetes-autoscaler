@@ -6,6 +6,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// Refresh reconciles live configuration and durable state before publishing capacity snapshots.
 func (policy *Policy) Refresh() {
 	if !policy.BeginWriterOperation() {
 		return
