@@ -44,6 +44,7 @@ type testEnvironment struct {
 	machinePoolInformer   *testInformer
 	nodeInformer          *testInformer
 	failover              *Policy
+	failureVisitor        func(func(FailureObservation)) error
 }
 
 func (environment *testEnvironment) NodeGroups() ([]cloudprovider.NodeGroup, error) {
@@ -78,6 +79,13 @@ func (environment *testEnvironment) FindNodeByProviderID(id string) (*corev1.Nod
 
 func (environment *testEnvironment) FindMachineByProviderID(string) (*unstructured.Unstructured, error) {
 	return nil, nil
+}
+
+func (environment *testEnvironment) VisitFailures(visit func(FailureObservation)) error {
+	if environment.failureVisitor != nil {
+		return environment.failureVisitor(visit)
+	}
+	return nil
 }
 
 func (environment *testEnvironment) enableAzureFailover(frozen bool, interval time.Duration, defaults ...config.NodeGroupAutoscalingOptions) error {

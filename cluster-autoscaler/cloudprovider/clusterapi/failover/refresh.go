@@ -54,6 +54,7 @@ func (policy *Policy) Refresh() {
 	}
 	previousPolicies := policy.Policies
 	overflow := policy.Overflow
+	overflowVersion := policy.OverflowVersion
 	policy.RUnlock()
 	policies := map[string]cloudprovider.NodeGroupCapacityPolicy{}
 	available := map[string]map[string]*Member{}
@@ -70,7 +71,7 @@ func (policy *Policy) Refresh() {
 		fallback.RetainTarget = true
 		fallback.Reason = SelectionReason(group, fmt.Errorf("invalid or unselected failover metadata"))
 		policies[group.Id()] = fallback
-		if overflow || !ValidPairIdentifier(pair) || (role != "primary" && role != "secondary") {
+		if !ValidPairIdentifier(pair) || (role != "primary" && role != "secondary") {
 			continue
 		}
 		member, err := policy.Member(ctx, group)
@@ -87,25 +88,55 @@ func (policy *Policy) Refresh() {
 		available[key][group.Object().GetName()] = member
 	}
 	members := policy.ConfiguredMembers(ctx, available, policies)
+	resynchronized := len(members) > 0 && len(members) == len(available)
 	for _, pairs := range members {
 		for name, roles := range pairs {
 			primary, secondary := roles["primary"], roles["secondary"]
 			if primary == nil || secondary == nil {
+				resynchronized = false
 				continue
+			}
+			pairObservations := observations
+			if overflow {
+				pairObservations, err = policy.resyncPairObservations(primary, secondary, observations)
+				if err != nil {
+					resynchronized = false
+					BlockMembers(roles, policies, err)
+					continue
+				}
 			}
 			var state *State
 			state, err := policy.Store.Reconcile(ctx, primary.Cluster, func(state *State) error {
-				return policy.reconcilePair(state, name, primary, secondary, observations, now)
+				return policy.reconcilePair(state, name, primary, secondary, pairObservations, now)
 			})
 			if err != nil {
+				resynchronized = false
 				BlockMembers(roles, policies, err)
 				klog.Warningf("Failover pair %s/%s admission suppressed: %v", primary.Cluster.GetNamespace(), name, err)
 				continue
 			}
-			policy.publishPair(name, state.Pairs[name], primary, secondary, observations, policies)
+			policy.publishPair(name, state.Pairs[name], primary, secondary, pairObservations, policies)
 		}
 	}
 	policy.Lock()
+	if policy.Overflow {
+		if overflow && resynchronized && policy.OverflowVersion == overflowVersion {
+			for key, processed := range observations {
+				if current := policy.Observations[key]; current.UID == processed.UID && current.Created.Equal(&processed.Created) {
+					delete(policy.Observations, key)
+				}
+			}
+			policy.Overflow = false
+		} else {
+			for id, snapshot := range policies {
+				snapshot.ScaleUpBlocked = true
+				snapshot.ConsiderPrimaryUnfit = false
+				snapshot.RetainTarget = true
+				snapshot.Reason = "failure observation overflow requires successful resynchronization"
+				policies[id] = snapshot
+			}
+		}
+	}
 	policy.Policies = policies
 	policy.FitExceptions = map[string]string{}
 	policy.Unlock()

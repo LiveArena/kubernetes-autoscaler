@@ -204,7 +204,7 @@ func (o *ScaleUpOrchestrator) ScaleUp(
 
 	if newNodes < bestOption.NodeCount {
 		klog.V(1).Infof("Only %d nodes can be added to %s due to cluster-wide limits", newNodes, bestOption.NodeGroup.Id())
-		if allOrNothing {
+		if allOrNothing || cloudprovider.GetNodeGroupCapacityPolicy(bestOption.NodeGroup).RequireFullScaleUp {
 			// Can't execute a scale-up that will accommodate all pods, so nothing is considered schedulable.
 			klog.V(1).Info("Not attempting scale-up due to all-or-nothing strategy: not all pods would be accommodated")
 			markedEquivalenceGroups := markAllGroupsAsUnschedulable(podEquivalenceGroups, AllOrNothingReason)

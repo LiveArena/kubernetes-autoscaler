@@ -47,6 +47,7 @@ type Policy struct {
 	Policies          map[string]cloudprovider.NodeGroupCapacityPolicy
 	Observations      map[string]FailureObservation
 	Overflow          bool
+	OverflowVersion   uint64
 	Handler           cache.ResourceEventHandlerRegistration
 }
 
@@ -66,6 +67,7 @@ func (policy *Policy) Observe(object interface{}) {
 	previous, exists := policy.Observations[key]
 	if !exists && len(policy.Observations) >= 64 {
 		policy.Overflow = true
+		policy.OverflowVersion++
 		return
 	}
 	if !exists || observation.Created.After(previous.Created.Time) || (observation.Created.Equal(&previous.Created) && observation.UID > previous.UID) {

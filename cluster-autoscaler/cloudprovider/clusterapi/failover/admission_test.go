@@ -26,11 +26,82 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"testing"
 	"time"
 )
+
+func TestObservationOverflowStaysClosedUntilResynchronizationCompletes(t *testing.T) {
+	for _, fault := range []string{"snapshot-error", "state-write-denied", "new-overflow"} {
+		statement := map[string]string{
+			"snapshot-error":     "FailedFailureSnapshotKeepsOverflowAndBufferedEvidence",
+			"state-write-denied": "DeniedStatePersistenceKeepsOverflowAndBufferedEvidence",
+			"new-overflow":       "OverflowDuringResynchronizationRequiresAnotherCompleteScan",
+		}[fault]
+		t.Run(statement, func(t *testing.T) {
+			controller, clock := newFailoverTestController(t)
+			provider := &testProvider{controller: controller}
+			require.NoError(t, provider.Refresh())
+			failoverTestFailure(controller, "lin", "primary", clock.Now())
+			selected := controller.failover.Observations["tenant/lin-primary-amp"]
+			noise := func(index int) *unstructured.Unstructured {
+				name := fmt.Sprintf("noise-%d", index)
+				attempt := &unstructured.Unstructured{Object: map[string]interface{}{"status": map[string]interface{}{"provisioningState": "Failed"}}}
+				attempt.SetNamespace("tenant")
+				attempt.SetUID(types.UID(string(selected.UID) + "-" + name))
+				attempt.SetCreationTimestamp(metav1.NewTime(clock.Now()))
+				attempt.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: AzureAPIGroup + "/v1beta1", Kind: "AzureMachinePool", Name: name, UID: types.UID(string(selected.OwnerUID) + "-" + name)}})
+				return attempt
+			}
+			for index := 0; index < 64; index++ {
+				controller.failover.Observe(noise(index))
+			}
+			require.True(t, controller.failover.Overflow)
+			require.Len(t, controller.failover.Observations, 64)
+			blocked, injected := true, false
+			controller.failureVisitor = func(visit func(FailureObservation)) error {
+				if blocked && fault == "snapshot-error" {
+					return fmt.Errorf("failure snapshot unavailable")
+				}
+				visit(selected)
+				if blocked && fault == "new-overflow" && !injected {
+					injected = true
+					controller.failover.Observe(noise(65))
+				}
+				return nil
+			}
+			if fault == "state-write-denied" {
+				controller.managementClient.(*fakedynamic.FakeDynamicClient).PrependReactor("update", "configmaps", func(action clienttesting.Action) (bool, runtime.Object, error) {
+					if blocked {
+						return true, nil, apierrors.NewForbidden(ConfigMaps.GroupResource(), "test", fmt.Errorf("denied"))
+					}
+					return false, nil, nil
+				})
+			}
+			require.NoError(t, provider.Refresh())
+			assert.True(t, controller.failover.Overflow)
+			assert.NotEmpty(t, controller.failover.Observations)
+			for _, candidate := range provider.NodeGroups() {
+				group := candidate.(*testGroup)
+				assert.True(t, group.GetCapacityPolicy().ScaleUpBlocked)
+				require.Error(t, group.IncreaseSize(1))
+			}
+			blocked = false
+			require.NoError(t, provider.Refresh())
+			assert.False(t, controller.failover.Overflow)
+			assert.Empty(t, controller.failover.Observations)
+			for _, candidate := range provider.NodeGroups() {
+				group := candidate.(*testGroup)
+				if group.object.GetName() == "lin-secondary" {
+					assert.False(t, group.GetCapacityPolicy().ScaleUpBlocked)
+					require.NoError(t, group.IncreaseSize(2))
+				}
+			}
+		})
+	}
+}
 
 func TestPrimaryFitEvidenceDoesNotSurviveResetOrDiscoveryFailure(t *testing.T) {
 	controller, _ := newFailoverTestController(t)

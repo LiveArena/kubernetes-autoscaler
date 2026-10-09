@@ -38,4 +38,6 @@ type Environment interface {
 	MachinePoolResource() schema.GroupVersionResource
 	FindNodeByProviderID(string) (*corev1.Node, error)
 	FindMachineByProviderID(string) (*unstructured.Unstructured, error)
+	// VisitFailures visits terminal failures from a synchronized management informer snapshot.
+	VisitFailures(func(FailureObservation)) error
 }

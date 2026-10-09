@@ -25,14 +25,125 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	testutils "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	fakescale "k8s.io/client-go/scale/fake"
 	clienttesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestFailureResynchronizationRejectsAnUnsynchronizedInformer(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	require.False(t, controller.azureIntegration.extension.azureMachinePoolMachineInformer.Informer().HasSynced())
+	require.Error(t, controller.VisitFailures(nil), "an incomplete initial informer snapshot cannot establish resynchronization")
+}
+
+func TestObservationOverflowResynchronizesDroppedFailuresWithoutRestartOrScaleReplay(t *testing.T) {
+	fixture := newFailoverOrchestratorFixture(t, "lin", "initial", false)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	fixture.controller.managementInformerFactory.Start(fixture.controller.stopChannel)
+	require.True(t, cache.WaitForCacheSync(ctx.Done(), fixture.controller.azureIntegration.extension.azureMachinePoolMachineInformer.Informer().HasSynced))
+	require.Zero(t, fixture.scan())
+	informerStore := fixture.controller.azureIntegration.extension.azureMachinePoolMachineInformer.Informer().GetStore()
+	failures := make([]*unstructured.Unstructured, 0, 65)
+	for index := 0; index < 65; index++ {
+		name := fmt.Sprintf("overflow-attempt-%d", index)
+		ownerName := fmt.Sprintf("unselected-pool-%d", index)
+		ownerUID := types.UID(ownerName)
+		if index == 64 {
+			ownerName, ownerUID = "lin-primary", "lin-primary-amp"
+		}
+		attempt := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": azureMachinePoolMachineApiGroup + "/v1beta1", "kind": "AzureMachinePoolMachine", "status": map[string]interface{}{"provisioningState": "Failed"}}}
+		attempt.SetName(name)
+		attempt.SetNamespace("tenant")
+		attempt.SetUID(types.UID(name))
+		attempt.SetCreationTimestamp(metav1.NewTime(fixture.clock.Now()))
+		attempt.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: azureMachinePoolMachineApiGroup + "/v1beta1", Kind: "AzureMachinePool", Name: ownerName, UID: ownerUID}})
+		require.NoError(t, informerStore.Add(attempt))
+		fixture.controller.failover.Observe(attempt)
+		failures = append(failures, attempt)
+	}
+	require.True(t, fixture.controller.failover.Overflow)
+	require.Len(t, fixture.controller.failover.Observations, 64)
+	assert.Equal(t, 2, fixture.scan())
+	assert.False(t, fixture.controller.failover.Overflow, "overflow must be recoverable through the informer snapshot")
+	assert.Empty(t, fixture.controller.failover.Observations, "a successful resync must retire the retained batch")
+	require.Equal(t, 1, fixture.writes(), "the dropped selected failure must expose exactly one fallback request")
+	cluster, err := fixture.controller.managementClient.Resource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "clusters"}).Namespace("tenant").Get(context.Background(), "test", metav1.GetOptions{})
+	require.NoError(t, err)
+	state, _, err := fixture.controller.failover.Store.Load(context.Background(), cluster)
+	require.NoError(t, err)
+	assert.Equal(t, failures[64].GetUID(), state.Pairs["lin"].Primary.LastAttemptUID)
+	assert.Equal(t, int64(1), state.Pairs["lin"].Primary.FailureEpoch)
+	for _, attempt := range failures {
+		fixture.controller.failover.Observe(attempt.DeepCopy())
+	}
+	assert.Zero(t, fixture.scan())
+	assert.False(t, fixture.controller.failover.Overflow)
+	assert.Equal(t, 1, fixture.writes(), "replayed overflow observations must not repeat scaling")
+	state, _, err = fixture.controller.failover.Store.Load(context.Background(), cluster)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), state.Pairs["lin"].Primary.FailureEpoch)
+}
+
+func TestClusterWideLimitsRejectPartialSecondaryRequestsWithoutConsumingAllowance(t *testing.T) {
+	for _, pair := range []string{"lin", "win2"} {
+		for _, limit := range []string{"nodes", "cores"} {
+			statement := map[string]string{
+				"nodes": "ClusterNodeCountLimitRejectsPartialSecondaryCapacity",
+				"cores": "ClusterCoreLimitRejectsPartialSecondaryCapacity",
+			}[limit]
+			t.Run(statement+"/Pair="+pair, func(t *testing.T) {
+				fixture := newFailoverOrchestratorFixture(t, pair, "initial", false)
+				require.Zero(t, fixture.scan())
+				fixture.observeAttempt("primary-failed")
+				if limit == "nodes" {
+					fixture.options.MaxNodesTotal = len(fixture.nodes) + 3
+				} else {
+					fixture.options.MaxCoresTotal = 14
+					fixture.provider.resourceLimiter = cloudprovider.NewResourceLimiter(nil, map[string]int64{cloudprovider.ResourceNameCores: 14})
+				}
+				fixture.registry, fixture.engine, fixture.filterPods = fixture.newScan()
+				require.Equal(t, 2, fixture.scan())
+				require.Zero(t, fixture.writes(), "a two-node secondary request must not be truncated to one")
+				cluster, err := fixture.controller.managementClient.Resource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "clusters"}).Namespace("tenant").Get(context.Background(), "test", metav1.GetOptions{})
+				require.NoError(t, err)
+				state, _, err := fixture.controller.failover.Store.Load(context.Background(), cluster)
+				require.NoError(t, err)
+				assert.Equal(t, 2, state.Pairs[pair].FallbackAllowance)
+				assert.Nil(t, state.Pairs[pair].SecondaryRequest)
+				for _, candidate := range fixture.provider.NodeGroups() {
+					group := candidate.(*nodegroup)
+					if group.scalableResource.Name() == pair+"-secondary" {
+						target, err := group.TargetSize()
+						require.NoError(t, err)
+						assert.Zero(t, target)
+					}
+				}
+				fixture.options.MaxNodesTotal = 20
+				fixture.options.MaxCoresTotal = 100
+				fixture.provider.resourceLimiter = cloudprovider.NewResourceLimiter(nil, nil)
+				fixture.registry, fixture.engine, fixture.filterPods = fixture.newScan()
+				require.Equal(t, 2, fixture.scan())
+				require.Equal(t, 1, fixture.writes(), "restoring capacity must admit the full secondary request")
+				for _, action := range fixture.controller.managementScaleClient.(*fakescale.FakeScaleClient).Actions() {
+					if action.GetVerb() == "update" {
+						requested := action.(clienttesting.UpdateAction).GetObject().(*autoscalingv1.Scale)
+						assert.Equal(t, pair+"-secondary", requested.Name)
+						assert.Equal(t, int32(2), requested.Spec.Replicas)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestResidualDemandScalingSurvivesRestartWithoutDuplicatePoolRequests(t *testing.T) {
 	for _, pair := range []string{"lin", "win2"} {
