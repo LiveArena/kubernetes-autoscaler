@@ -14,11 +14,9 @@ import (
 	"time"
 )
 
-func TestStateAcceptsOpaquePairIdentifiersWithoutExceedingThePairLimit(t *testing.T) {
-	state := &State{Version: StateVersion, ClusterUID: "cluster", Pairs: map[string]*Pair{"abc": {Phase: Healthy}, "batch": {Phase: Healthy}}}
+func TestStateAcceptsMoreThanTwoOpaquePairIdentifiers(t *testing.T) {
+	state := &State{Version: StateVersion, ClusterUID: "cluster", Pairs: map[string]*Pair{"abc": {Phase: Healthy}, "batch": {Phase: Healthy}, "extra": {Phase: Healthy}, "worker.gpu": {Phase: Healthy}}}
 	require.NoError(t, state.Validate("cluster"))
-	state.Pairs["extra"] = &Pair{Phase: Healthy}
-	require.Error(t, state.Validate("cluster"), "pair count must remain explicitly bounded")
 }
 func TestPairIdentifiersUseBoundedNonemptyLabelSyntax(t *testing.T) {
 	for _, identifier := range []string{"abc", "Batch_2", "worker.gpu", strings.Repeat("a", 63)} {

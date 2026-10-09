@@ -13,7 +13,6 @@ const (
 	ModeDisabled  = "disabled"
 	ModeActive    = "active"
 	ModeFreeze    = "freeze"
-	PairLimit     = 2
 )
 
 type Configuration struct {

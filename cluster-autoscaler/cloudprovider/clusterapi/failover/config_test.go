@@ -17,9 +17,12 @@ import (
 )
 
 func TestConfigurationReaderAcceptsOnlyCompleteUnambiguousOwnedPairs(t *testing.T) {
-	for _, fault := range []string{"valid", "owner", "identity", "version", "incomplete", "duplicate", "duplicate-role-field", "duplicate-pair-key", "unknown-field", "malformed", "trailing", "denied"} {
+	for _, fault := range []string{"valid", "multiple-pairs", "empty", "oversized", "owner", "identity", "version", "incomplete", "duplicate", "duplicate-role-field", "duplicate-pair-key", "unknown-field", "malformed", "trailing", "denied"} {
 		statement := map[string]string{
 			"valid":                "ValidOwnedConfigurationIsReadWithoutMutation",
+			"multiple-pairs":       "AdditionalDistinctPairsAreReadWithoutMutation",
+			"empty":                "ConfigurationWithoutPairsIsRejected",
+			"oversized":            "OversizedValidConfigurationIsRejected",
 			"owner":                "ForeignClusterOwnerIsRejected",
 			"identity":             "StaleClusterIdentityIsRejected",
 			"version":              "UnsupportedConfigurationVersionIsRejected",
@@ -39,6 +42,10 @@ func TestConfigurationReaderAcceptsOnlyCompleteUnambiguousOwnedPairs(t *testing.
 			cluster.SetUID("cluster-uid")
 			configuration := Configuration{APIVersion: ConfigVersion, Cluster: ClusterIdentity{Name: "test", Namespace: "tenant", UID: "cluster-uid"}, Pairs: map[string]ConfiguredPair{"lin": {Primary: ConfiguredPool{Name: "lin-primary"}, Secondary: ConfiguredPool{Name: "lin-secondary"}}, "win2": {Primary: ConfiguredPool{Name: "win2-primary"}, Secondary: ConfiguredPool{Name: "win2-secondary"}}}}
 			switch fault {
+			case "multiple-pairs":
+				configuration.Pairs["batch"] = ConfiguredPair{Primary: ConfiguredPool{Name: "batch-primary"}, Secondary: ConfiguredPool{Name: "batch-secondary"}}
+			case "empty":
+				configuration.Pairs = map[string]ConfiguredPair{}
 			case "identity":
 				configuration.Cluster.UID = "other"
 			case "version":
@@ -51,7 +58,9 @@ func TestConfigurationReaderAcceptsOnlyCompleteUnambiguousOwnedPairs(t *testing.
 			encoded, err := json.Marshal(configuration)
 			require.NoError(t, err)
 			payload := string(encoded)
-			if fault == "unknown-field" {
+			if fault == "oversized" {
+				payload = strings.Repeat(" ", StateLimit) + payload
+			} else if fault == "unknown-field" {
 				payload = strings.TrimSuffix(payload, "}") + `,"mode":"active"}`
 			} else if fault == "malformed" {
 				payload = "{"
@@ -77,7 +86,7 @@ func TestConfigurationReaderAcceptsOnlyCompleteUnambiguousOwnedPairs(t *testing.
 				})
 			}
 			actual, err := ReadConfiguration(context.Background(), client, cluster)
-			if fault == "valid" {
+			if fault == "valid" || fault == "multiple-pairs" {
 				require.NoError(t, err)
 				assert.Equal(t, configuration, *actual)
 			} else {

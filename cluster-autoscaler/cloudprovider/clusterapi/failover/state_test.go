@@ -26,6 +26,8 @@ func TestStatePersistenceSurvivesRestartAndFailsClosedOnUnsafeUpdates(t *testing
 	store := &Store{Client: client}
 	state, err := store.Reconcile(ctx, cluster, func(state *State) error {
 		state.Pairs["lin"] = &Pair{Phase: Degraded, Primary: Role{Failed: true}}
+		state.Pairs["batch"] = &Pair{Phase: Healthy}
+		state.Pairs["extra"] = &Pair{Phase: Healthy}
 		return nil
 	})
 	require.NoError(t, err)
@@ -33,6 +35,7 @@ func TestStatePersistenceSurvivesRestartAndFailsClosedOnUnsafeUpdates(t *testing
 	restarted := &Store{Client: client}
 	loaded, _, err := restarted.Load(ctx, cluster)
 	require.NoError(t, err)
+	assert.Len(t, loaded.Pairs, 3)
 	assert.Equal(t, state, loaded)
 	conflicts := 0
 	client.PrependReactor("update", "configmaps", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -76,7 +79,7 @@ func TestStateReaderRejectsMalformedAmbiguousForeignOrOversizedState(t *testing.
 		{"DuplicateSchemaVersionFieldsAreRejected", `{"version":1,"version":2,"clusterUID":"cluster-uid","pairs":{}}`},
 		{"DuplicatePairKeysAreRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Degraded","primary":{"failed":true}},"abc":{"phase":"Healthy"}}}`},
 		{"DuplicateRoleFieldsAreRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","primary":{"failed":true},"primary":{"failed":false}}}}`},
-		{"OversizedStateIsRejected", strings.Repeat("x", StateLimit+1)},
+		{"OversizedValidStateIsRejected", strings.Repeat(" ", StateLimit) + `{"version":2,"clusterUID":"cluster-uid","pairs":{}}`},
 	} {
 		t.Run(scenario.statement, func(t *testing.T) {
 			cluster := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster"}}

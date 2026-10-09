@@ -46,8 +46,8 @@ func ReadConfiguration(ctx context.Context, client dynamic.Interface, cluster *u
 	if configuration.APIVersion != ConfigVersion || identity.Name != cluster.GetName() || identity.Namespace != cluster.GetNamespace() || identity.UID != cluster.GetUID() {
 		return nil, fmt.Errorf("unsupported or stale failover configuration identity")
 	}
-	if len(configuration.Pairs) == 0 || len(configuration.Pairs) > PairLimit {
-		return nil, fmt.Errorf("failover configuration requires between one and %d complete pairs", PairLimit)
+	if len(configuration.Pairs) == 0 {
+		return nil, fmt.Errorf("failover configuration requires at least one complete pair")
 	}
 	names := map[string]bool{}
 	for name, pair := range configuration.Pairs {

@@ -137,8 +137,8 @@ pool, changing configuration or observing readiness alone is insufficient. The
 autoscaler **MUST NOT** silently reset, prune, migrate or take over retirement.
 
 A distinct identifier creates an independent binding, but does not establish
-cleanup of the old identifier or its resources. Retained records still count
-toward the two-pair state bound; changing names is not an unlimited workaround.
+cleanup of the old identifier or its resources. Retained records still consume
+the encoded-state size budget; changing names is not a cleanup workaround.
 No new leadership/retirement system, state-delete permission or live purge is
 authorized by this clarification. This supersedes the earlier migration proposal.
 
@@ -199,10 +199,10 @@ actual MachinePool names remain explicit configuration references.
 `lin` and `win2` are current external tfapply examples, neither reserved values
 nor an exhaustive identifier set. Runtime discovery, config/state validation,
 disabled/frozen admission, request accounting, failure/recovery and scale-down
-preference **MUST NOT** whitelist them, require either literal key, or infer
-Linux/Windows/GPU behavior from a key or pool-name prefix. Pair-cardinality,
-identifier-format and encoded-state bounds **MUST** be explicit and independent
-of a deployment-name whitelist. Workload compatibility uses actual rendered
+preference **MUST NOT** allowlist them, require either literal key, or infer
+Linux/Windows/GPU behavior from a key or pool-name prefix. Identifier-format,
+one-primary/one-secondary membership and encoded-state bounds **MUST** be explicit
+and independent of a deployment-name allowlist. Workload compatibility uses actual rendered
 constraints and scheduler predicates. Linux GPU and Windows are compatibility
 fixtures for the same algorithm; AMPM observation is the Azure provider adapter.
 
@@ -212,11 +212,13 @@ Equivalent valid configurations under different identifiers **MUST** receive
 the same behavior. Renaming live persisted pairing still follows the agreed
 identity/generation transition rules; this is not permission to reset state.
 
-The 2026-10-09 implementation removes the `lin`/`win2` whitelist from
+The 2026-10-09 implementation removes the `lin`/`win2` allowlist from
 config/state validation, discovery and disabled gating. Identifiers use nonempty
-Kubernetes label-value syntax (1-63 characters), and configuration declares one
-or two complete pairs within the explicit state bound. This supersedes earlier
-fixed-name wording without changing JSON/annotation shape or ownership/safety rules.
+Kubernetes label-value syntax (1-63 characters), and configuration declares at
+least one complete pair. The requestor subsequently rejected the arbitrary
+two-pair cap: configuration and persisted state have no fixed pair-count limit,
+while their 64 KiB encoded-size bounds remain. This supersedes earlier fixed-name
+and pair-count wording without changing JSON/annotation shape or ownership/safety rules.
 No tfapply edit, automatic migration or release is implied.
 
 ### Multiple Pools and Graceful Degradation
@@ -607,7 +609,7 @@ The owner and tfapply workstream **MUST** agree the following before integration
 - Annotation placement and explicit current-generation/overlap selection rules.
 - Default-off activation, capable-image verification, and old-image rejection.
 - Management ConfigMap `<cluster>-autoscaler-failover-state`, schema version,
-  Cluster ownership, finite pair/role/attempt bounds, and target/recovery fields.
+  Cluster ownership, encoded-size and per-pair role/attempt bounds, and target/recovery fields.
 - Reuse of existing elected-leader lifecycle, resourceVersion handling, and exact
   tenant-scoped RBAC; leadership/fencing redesign is outside INF-761 scope.
 - Positive-evidence recovery and proposed two-scan/15-minute timing.
@@ -1036,12 +1038,12 @@ still block a complete deployment claim. No consumer enablement guard was remove
 | Activation | `--azure-machinepool-failover-mode=disabled` by default; `active`/`freeze` require AMPM discovery, initial handler synchronization, and autoscaler leader election |
 | Rollback freeze | Set `--azure-machinepool-failover-mode=freeze`; observation, durable state, secondary discovery/Ready/incoming accounting, and normal safe scale-down continue without new secondary requests |
 | Balancing | Activation rejects `--balance-similar-node-groups=true` |
-| Pair metadata | Opaque nonempty label-style identifier plus primary/secondary role annotations; no lin/win2 whitelist or `failover-current` requirement |
-| Configuration/selection | Exact-name read-only config GET; one or two complete declared pairs; strict duplicate/unknown JSON-field rejection and live identity/ownership/role checks; nonselected generations remain visible without admission |
+| Pair metadata | Opaque nonempty label-style identifier plus primary/secondary role annotations; no lin/win2 allowlist or `failover-current` requirement |
+| Configuration/selection | Exact-name read-only config GET; at least one complete declared pair, no fixed pair-count limit, 64 KiB encoded-size bound; strict duplicate/unknown JSON-field rejection and live identity/ownership/role checks; nonselected generations remain visible without admission |
 | Ownership | Cluster owner UID on MachinePool; MachinePool infrastructureRef to AMP with matching owner UID; terminal AMPM AMP owner identity matches that AMP |
 | Maximum | Existing pool max-size annotation, inherited by tfapply from the primary initially; live annotation, target, UID, and generation checks precede each paired scale write |
 | State | Management ConfigMap `<cluster>-autoscaler-failover-state`, Cluster-owned, `data.state.json`, schema version 2, maximum encoded size 64 KiB; pre-feature brownfield initializes absent state, while unexpected version 1 is rejected rather than reset |
-| State bounds | Two pairs, two roles each, one attempt watermark/fingerprint per role, at most one primary and one secondary intent per pair, and a bounded failed-increment allowance; no per-pod history or cumulative replica debt |
+| State bounds | No fixed pair-count limit; 64 KiB encoded-size bound, two roles per pair, one attempt watermark/fingerprint per role, at most one primary and one secondary intent per pair, and a bounded failed-increment allowance; no per-pod history or cumulative replica debt |
 | Observation buffer | At most 64 AMP-owner keys; successfully persisted observations are retired; overflow fails closed |
 | Coordination | Existing autoscaler leader election and process lifecycle, plus cancelled/stopped provider writer context; no separate management Lease or additional Lease RBAC |
 | Scale write | Persist bounded intent first, then live scale GET and resourceVersion-bearing UPDATE; target/UID/metadata/maximum and durable permission checks reject stale or repeated admission |

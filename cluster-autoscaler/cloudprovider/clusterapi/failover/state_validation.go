@@ -6,7 +6,7 @@ import (
 )
 
 func (state *State) Validate(clusterUID types.UID) error {
-	if state.Version != StateVersion || state.ClusterUID != clusterUID || len(state.Pairs) > PairLimit || state.Pairs == nil {
+	if state.Version != StateVersion || state.ClusterUID != clusterUID || state.Pairs == nil {
 		return fmt.Errorf("unsupported, stale, or unbounded failover state")
 	}
 	for name, pair := range state.Pairs {
