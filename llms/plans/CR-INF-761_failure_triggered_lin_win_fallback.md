@@ -71,11 +71,14 @@ Real Ready nodes and independently viable registered arrivals remain usable.
 Accounting changes do not mutate replicas, provider-ID lists or scale-up records.
 
 Failure watermarks make repeated/replacement observations idempotent. The event
-buffer retains at most 64 AMP-owner keys. Overflow closes admission until selected
-pairs are reconciled using the synchronized management informer snapshot. Resync
-retains at most two selected-role observations per pair, preserves newer events,
-and clears overflow only after successful reconciliation with no newer dropped
-event. Snapshot/state failure keeps admission closed rather than losing evidence.
+buffer retains at most 64 AMP-owner keys. Overflow recovery scans the synchronized
+management informer for every validated discovered owner, including currently
+unselected owners and empty lifecycle selections. One recovered watermark per
+owner in the last fully validated discovery snapshot preserves evidence for later
+selection after the failed object disappears. Complete trusted discovery prunes
+departed identities; incomplete discovery does not erase recovered evidence or
+clear overflow. Successful reconciliation and no newer dropped event are also
+required before admission reopens. Snapshot/state failure keeps admission closed.
 
 ### Primary-First Demand and Bounded Requests
 
@@ -94,6 +97,9 @@ Deadlines survive restart. Qualifying later failure or deadline expiry releases
 only the applicable unmet increment for fallback. Current primary saturation or
 verified scheduler-fit/hard-limit exclusions can also justify scoped fallback;
 internal predicate errors cannot.
+
+Fit probes use isolated pod-group state; a blocked primary's theoretical fit
+cannot hide still-pending pods from ordinary no-scale-up reporting.
 
 Before/after targets distinguish unwritten retry from a committed request.
 Unexpected target changes close admission. Allowances are bounded rather than

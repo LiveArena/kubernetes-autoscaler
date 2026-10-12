@@ -18,6 +18,8 @@ package orchestrator
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -53,17 +55,8 @@ func (orchestrator *ScaleUpOrchestrator) preparePrimaryFitFallback(groups []clou
 				continue
 			}
 			reason = fmt.Sprintf("primary resource limits prevent scaling: %v", exceeded)
-		} else if len(orchestrator.SchedulablePodGroups(pods, primary, template)) == 0 {
-			verified := len(pods) > 0
-			for _, podGroup := range pods {
-				failure := podGroup.SchedulingErrors[primary.Id()]
-				if schedulingFailure, typed := failure.(clustersnapshot.SchedulingError); !typed || schedulingFailure.Type() == clustersnapshot.SchedulingInternalError {
-					verified = false
-				}
-			}
-			if verified {
-				reason = "primary cannot fit the current residual demand"
-			}
+		} else if orchestrator.primaryCannotFit(pods, primary, template) {
+			reason = "primary cannot fit the current residual demand"
 		}
 		if reason != "" {
 			if err := extension.AllowPrimaryFitFallback(reason); err != nil {
@@ -73,4 +66,24 @@ func (orchestrator *ScaleUpOrchestrator) preparePrimaryFitFallback(groups []clou
 			}
 		}
 	}
+}
+
+func (orchestrator *ScaleUpOrchestrator) primaryCannotFit(pods []*equivalence.PodGroup, primary cloudprovider.NodeGroup, template *framework.NodeInfo) bool {
+	probes := make([]*equivalence.PodGroup, len(pods))
+	for index, original := range pods {
+		probe := *original
+		probe.SchedulableGroups = slices.Clone(original.SchedulableGroups)
+		probe.SchedulingErrors = maps.Clone(original.SchedulingErrors)
+		probes[index] = &probe
+	}
+	if len(probes) == 0 || len(orchestrator.SchedulablePodGroups(probes, primary, template)) != 0 {
+		return false
+	}
+	for _, probe := range probes {
+		failure, typed := probe.SchedulingErrors[primary.Id()].(clustersnapshot.SchedulingError)
+		if !typed || failure.Type() == clustersnapshot.SchedulingInternalError {
+			return false
+		}
+	}
+	return true
 }

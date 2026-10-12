@@ -48,9 +48,17 @@ func (policy *Policy) Refresh() {
 		return
 	}
 	policy.RLock()
-	observations := make(map[string]FailureObservation, len(policy.Observations))
-	for key, observation := range policy.Observations {
+	buffered := make(map[string]FailureObservation, len(policy.Observations))
+	observations := make(map[string]FailureObservation, len(policy.Observations)+len(policy.RecoveredObservations))
+	for key, observation := range policy.RecoveredObservations {
 		observations[key] = observation
+	}
+	for key, observation := range policy.Observations {
+		buffered[key] = observation
+		previous, found := observations[key]
+		if !found || observation.Created.After(previous.Created.Time) || observation.Created.Equal(&previous.Created) && observation.UID > previous.UID {
+			observations[key] = observation
+		}
 	}
 	previousPolicies := policy.Policies
 	overflow := policy.Overflow
@@ -58,6 +66,7 @@ func (policy *Policy) Refresh() {
 	policy.RUnlock()
 	policies := map[string]cloudprovider.NodeGroupCapacityPolicy{}
 	available := map[string]map[string]*Member{}
+	discoveryComplete := true
 	for _, candidate := range groups {
 		group := candidate.(Group)
 		annotations := group.Object().GetAnnotations()
@@ -73,10 +82,12 @@ func (policy *Policy) Refresh() {
 		fallback.Reason = SelectionReason(group, fmt.Errorf("invalid or unselected failover metadata"))
 		policies[group.Id()] = fallback
 		if !ValidPairIdentifier(pair) || (role != "primary" && role != "secondary") {
+			discoveryComplete = false
 			continue
 		}
 		member, err := policy.Member(ctx, group)
 		if err != nil {
+			discoveryComplete = false
 			klog.Warningf("Failover group %s unavailable: %v", group.Id(), err)
 			continue
 		}
@@ -89,22 +100,24 @@ func (policy *Policy) Refresh() {
 		available[key][group.Object().GetName()] = member
 	}
 	members := policy.ConfiguredMembers(ctx, available, policies)
-	resynchronized := len(members) > 0 && len(members) == len(available)
+	resynchronized := discoveryComplete && len(members) > 0 && len(members) == len(available)
+	pairObservations, snapshotErr := policy.candidateFailureObservations(available, observations, overflow)
+	if snapshotErr != nil {
+		resynchronized = false
+		for _, candidates := range available {
+			BlockMembers(candidates, policies, snapshotErr)
+		}
+	} else if discoveryComplete {
+		policy.Lock()
+		policy.RecoveredObservations = pairObservations
+		policy.Unlock()
+	}
 	for _, pairs := range members {
 		for name, roles := range pairs {
 			primary, secondary := roles["primary"], roles["secondary"]
-			if primary == nil || secondary == nil {
+			if snapshotErr != nil || primary == nil || secondary == nil {
 				resynchronized = false
 				continue
-			}
-			pairObservations := observations
-			if overflow {
-				pairObservations, err = policy.resyncPairObservations(primary, secondary, observations)
-				if err != nil {
-					resynchronized = false
-					BlockMembers(roles, policies, err)
-					continue
-				}
 			}
 			var state *State
 			state, err := policy.Store.Reconcile(ctx, primary.Cluster, func(state *State) error {
@@ -135,7 +148,7 @@ func (policy *Policy) Refresh() {
 	policy.Lock()
 	if policy.Overflow {
 		if overflow && resynchronized && policy.OverflowVersion == overflowVersion {
-			for key, processed := range observations {
+			for key, processed := range buffered {
 				if current := policy.Observations[key]; current.UID == processed.UID && current.Created.Equal(&processed.Created) {
 					delete(policy.Observations, key)
 				}

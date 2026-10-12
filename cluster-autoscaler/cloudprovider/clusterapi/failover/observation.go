@@ -81,24 +81,30 @@ func (role *Role) ObserveFailure(observation FailureObservation, ready []string,
 	return true
 }
 
-func (policy *Policy) resyncPairObservations(primary, secondary *Member, retained map[string]FailureObservation) (map[string]FailureObservation, error) {
+func (policy *Policy) candidateFailureObservations(available map[string]map[string]*Member, retained map[string]FailureObservation, resync bool) (map[string]FailureObservation, error) {
 	observations := map[string]FailureObservation{}
-	for _, member := range []*Member{primary, secondary} {
-		key := member.Cluster.GetNamespace() + "/" + string(member.Infrastructure.GetUID())
-		if observation, found := retained[key]; found {
-			observations[key] = observation
-		}
-	}
-	err := policy.Environment.VisitFailures(func(observation FailureObservation) {
-		for _, member := range []*Member{primary, secondary} {
-			if observation.Namespace != member.Cluster.GetNamespace() || observation.OwnerUID != member.Infrastructure.GetUID() || observation.OwnerName != member.Infrastructure.GetName() {
-				continue
-			}
-			key := observation.Namespace + "/" + string(observation.OwnerUID)
-			previous, found := observations[key]
-			if !found || observation.Created.After(previous.Created.Time) || observation.Created.Equal(&previous.Created) && observation.UID > previous.UID {
+	owners := map[string]*Member{}
+	for _, members := range available {
+		for _, member := range members {
+			key := member.Cluster.GetNamespace() + "/" + string(member.Infrastructure.GetUID())
+			owners[key] = member
+			if observation, found := retained[key]; found && observation.OwnerName == member.Infrastructure.GetName() {
 				observations[key] = observation
 			}
+		}
+	}
+	if !resync {
+		return observations, nil
+	}
+	err := policy.Environment.VisitFailures(func(observation FailureObservation) {
+		key := observation.Namespace + "/" + string(observation.OwnerUID)
+		member := owners[key]
+		if member == nil || observation.OwnerName != member.Infrastructure.GetName() {
+			return
+		}
+		previous, found := observations[key]
+		if !found || observation.Created.After(previous.Created.Time) || observation.Created.Equal(&previous.Created) && observation.UID > previous.UID {
+			observations[key] = observation
 		}
 	})
 	return observations, err

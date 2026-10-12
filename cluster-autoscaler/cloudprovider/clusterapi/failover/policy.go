@@ -32,25 +32,26 @@ import (
 // Policy reconciles durable pair state and publishes capacity and admission snapshots.
 type Policy struct {
 	sync.RWMutex
-	Environment       Environment
-	Store             *Store
-	Clock             clock.Clock
-	Stopped           atomic.Bool
-	WriterContext     context.Context
-	CancelWriter      context.CancelFunc
-	WriterMu          sync.Mutex
-	WriterOperations  sync.WaitGroup
-	FitExceptions     map[string]string
-	ScanInterval      time.Duration
-	NodeGroupDefaults config.NodeGroupAutoscalingOptions
-	Frozen            bool
-	Policies          map[string]cloudprovider.NodeGroupCapacityPolicy
-	Observations      map[string]FailureObservation
-	Overflow          bool
-	OverflowVersion   uint64
-	Handler           cache.ResourceEventHandlerRegistration
-	LifecycleClusters map[string]*unstructured.Unstructured
-	PairOperations    map[string]int
+	Environment           Environment
+	Store                 *Store
+	Clock                 clock.Clock
+	Stopped               atomic.Bool
+	WriterContext         context.Context
+	CancelWriter          context.CancelFunc
+	WriterMu              sync.Mutex
+	WriterOperations      sync.WaitGroup
+	FitExceptions         map[string]string
+	ScanInterval          time.Duration
+	NodeGroupDefaults     config.NodeGroupAutoscalingOptions
+	Frozen                bool
+	Policies              map[string]cloudprovider.NodeGroupCapacityPolicy
+	Observations          map[string]FailureObservation
+	RecoveredObservations map[string]FailureObservation
+	Overflow              bool
+	OverflowVersion       uint64
+	Handler               cache.ResourceEventHandlerRegistration
+	LifecycleClusters     map[string]*unstructured.Unstructured
+	PairOperations        map[string]int
 }
 
 // Observe retains the newest terminal failure per AMP owner in a bounded buffer.

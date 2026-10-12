@@ -85,6 +85,49 @@ func (group *primaryFitTestGroup) AllowPrimaryFitFallback(reason string) error {
 	return nil
 }
 
+func TestPrimaryFitProbesPreservePendingPodStatusAndSharedSchedulingErrors(t *testing.T) {
+	for _, demand := range []struct {
+		statement string
+		cpu       int64
+		unfit     bool
+	}{{"FittingBlockedPrimaryDoesNotHidePendingPods", 500, false}, {"UnfitProbeDoesNotPolluteSharedSchedulingErrors", 5000, true}} {
+		t.Run(demand.statement, func(t *testing.T) {
+			provider := testprovider.NewTestCloudProviderBuilder().WithOnScaleUp(func(string, int) error { return nil }).Build()
+			provider.AddNodeGroup("primary", 0, 10, 1)
+			provider.AddNodeGroup("secondary", 0, 10, 1)
+			now := time.Now()
+			nodes := []*apiv1.Node{BuildTestNode("primary-ready", 4000, 10000), BuildTestNode("secondary-ready", 1000, 10000)}
+			for index, role := range []string{"primary", "secondary"} {
+				SetNodeReadyState(nodes[index], true, now.Add(-time.Minute))
+				provider.AddNode(role, nodes[index])
+			}
+			listers := kube_util.NewListerRegistry(nil, nil, kube_util.NewTestPodLister(nil), nil, nil, nil, nil, nil, nil)
+			ctx, err := NewScaleTestAutoscalingContext(defaultOptions, &fake.Clientset{}, listers, provider, nil, nil)
+			assert.NoError(t, err)
+			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(nodes, nil, nil))
+			templates := map[string]*framework.NodeInfo{"primary": framework.NewTestNodeInfo(BuildTestNode("primary-template", 4000, 10000)), "secondary": framework.NewTestNodeInfo(BuildTestNode("secondary-template", 1000, 10000))}
+			registry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, ctx.LogRecorder, NewBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 15 * time.Minute}), asyncnodegroups.NewDefaultAsyncNodeGroupStateChecker())
+			assert.NoError(t, registry.UpdateNodes(nodes, templates, now))
+			orchestrator := New()
+			orchestrator.Initialize(&ctx, processors.DefaultProcessors(defaultOptions), registry, newEstimatorBuilder(), taints.TaintConfig{})
+			primary := &primaryFitTestGroup{NodeGroup: provider.GetNodeGroup("primary"), policy: cloudprovider.NodeGroupCapacityPolicy{ScaleUpBlocked: true, Reason: "primary trial in flight"}}
+			secondary := &primaryFitTestGroup{NodeGroup: provider.GetNodeGroup("secondary"), policy: cloudprovider.NodeGroupCapacityPolicy{ScaleUpBlocked: true, ConsiderPrimaryUnfit: true, PrimaryNodeGroupID: "primary"}}
+			pods := equivalence.BuildPodGroups([]*apiv1.Pod{BuildTestPod("pending-demand", demand.cpu, 100)})
+			assert.NotNil(t, orchestrator.IsNodeGroupReadyToScaleUp(primary, now))
+			orchestrator.preparePrimaryFitFallback([]cloudprovider.NodeGroup{primary, secondary}, templates, resource.Limits{cloudprovider.ResourceNameCores: 10}, pods, now)
+			assert.False(t, pods[0].Schedulable, "a probe is not an eligible expansion candidate")
+			assert.Empty(t, pods[0].SchedulableGroups)
+			assert.Empty(t, pods[0].SchedulingErrors, "probe errors belong to the isolated fit check")
+			assert.Len(t, GetRemainingPods(pods, map[string]status.Reasons{"primary": NewSkippedReasons("primary trial in flight")}), 1)
+			if demand.unfit {
+				assert.Contains(t, secondary.reason, "primary cannot fit")
+			} else {
+				assert.Empty(t, secondary.reason)
+			}
+		})
+	}
+}
+
 func TestPrimaryResourceLimitsPermitSecondaryFitExceptionsOnlyWhileEligible(t *testing.T) {
 	provider := testprovider.NewTestCloudProviderBuilder().WithOnScaleUp(func(string, int) error { return nil }).Build()
 	provider.AddNodeGroup("primary", 0, 10, 1)
