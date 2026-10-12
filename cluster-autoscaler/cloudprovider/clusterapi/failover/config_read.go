@@ -60,14 +60,28 @@ func ReadConfiguration(ctx context.Context, client dynamic.Interface, cluster *u
 		return nil, fmt.Errorf("invalid failover configuration fields: %v", strictErrors)
 	}
 	identity := configuration.Cluster
-	if configuration.APIVersion != ConfigVersion || identity.Name != cluster.GetName() || identity.Namespace != cluster.GetNamespace() || identity.UID != cluster.GetUID() {
+	if configuration.APIVersion == ConfigVersion {
+		if err := validateLegacyConfigurationFields(encoded); err != nil {
+			return nil, err
+		}
+	}
+	if (configuration.APIVersion != ConfigVersion && configuration.APIVersion != LifecycleConfigVersion) || identity.Name != cluster.GetName() || identity.Namespace != cluster.GetNamespace() || identity.UID != cluster.GetUID() {
 		return nil, fmt.Errorf("unsupported or stale failover configuration identity")
 	}
-	if len(configuration.Pairs) == 0 {
+	if len(configuration.Pairs) == 0 && configuration.APIVersion == ConfigVersion {
 		return nil, fmt.Errorf("failover configuration requires at least one complete pair")
 	}
 	names := map[string]bool{}
 	for name, pair := range configuration.Pairs {
+		if configuration.APIVersion == ConfigVersion && pair.Intent != nil {
+			return nil, fmt.Errorf("lifecycle intent requires configuration v2")
+		}
+		if configuration.APIVersion == LifecycleConfigVersion {
+			intent := pair.Intent
+			if intent == nil || !ValidPairIdentifier(intent.RegistrationID) || (intent.State != "Creating" && intent.State != "Active" && intent.State != "Retiring") || (intent.ResourceRetirementComplete && intent.State != "Retiring") {
+				return nil, fmt.Errorf("invalid or missing lifecycle intent for pair %q", name)
+			}
+		}
 		if !ValidPairIdentifier(name) {
 			return nil, fmt.Errorf("invalid failover pair identifier %q", name)
 		}

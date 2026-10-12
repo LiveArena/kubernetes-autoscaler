@@ -34,6 +34,13 @@ func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error 
 	if err != nil {
 		return err
 	}
+	if configuration.APIVersion == LifecycleConfigVersion {
+		pair, found := configuration.Pairs[group.Object().GetAnnotations()[PairKey]]
+		if !found {
+			return fmt.Errorf("pool is absent from lifecycle configuration")
+		}
+		configuration.Pairs = map[string]ConfiguredPair{group.Object().GetAnnotations()[PairKey]: pair}
+	}
 	resolved, err := policy.ResolveConfiguredPools(ctx, member.Cluster, configuration)
 	if err != nil {
 		return err

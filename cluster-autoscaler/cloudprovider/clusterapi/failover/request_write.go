@@ -28,6 +28,8 @@ func (policy *Policy) PrepareScaleRequest(group Group, delta int) error {
 		return fmt.Errorf("failover writer has stopped")
 	}
 	defer policy.WriterOperations.Done()
+	finishPairOperation := policy.beginPairOperation(group.Id())
+	defer finishPairOperation()
 	ctx := policy.RequestContext()
 	member, err := policy.Member(ctx, group)
 	if err != nil {
@@ -39,6 +41,13 @@ func (policy *Policy) PrepareScaleRequest(group Group, delta int) error {
 		pair := state.Pairs[name]
 		if pair == nil {
 			return fmt.Errorf("failover pair not durably reconciled")
+		}
+		if err := policy.assertPairLifecycleAdmission(ctx, member.Cluster, name, pair); err != nil {
+			return err
+		}
+		if pair.Lifecycle != nil {
+			pair.Lifecycle.OperationsSettled = false
+			pair.Lifecycle.Reason = "admitted scale request remains unresolved"
 		}
 		request := &pair.PrimaryRequest
 		record := &pair.Primary

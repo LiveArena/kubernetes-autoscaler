@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"strings"
@@ -117,6 +118,68 @@ func TestConfigurationReaderAcceptsOnlyCompleteUnambiguousOwnedPairs(t *testing.
 		})
 	}
 }
+func TestPairLifecycleConfigurationRequiresAnExplicitVersionAndIntent(t *testing.T) {
+	for _, scenario := range []struct {
+		statement, version, state                      string
+		empty, omitIntent, nullIntent, complete, valid bool
+	}{
+		{statement: "VersionTwoAcceptsCreatingIntent", state: "Creating", valid: true},
+		{statement: "VersionTwoAcceptsActiveIntent", state: "Active", valid: true},
+		{statement: "VersionTwoAcceptsRetiringIntent", state: "Retiring", complete: true, valid: true},
+		{statement: "VersionTwoAcceptsPairingOff", empty: true, valid: true},
+		{statement: "LegacyVersionRejectsLifecycleIntent", version: ConfigVersion, state: "Creating"},
+		{statement: "LegacyVersionRejectsNullLifecycleField", version: ConfigVersion, nullIntent: true},
+		{statement: "VersionTwoRejectsMissingIntent", omitIntent: true},
+		{statement: "ObservedRetiredIsNotARequestedIntent", state: "Retired"},
+		{statement: "ResourceCompletionRequiresRetiringIntent", state: "Active", complete: true},
+	} {
+		t.Run(scenario.statement, func(t *testing.T) {
+			controller, _ := newFailoverTestController(t)
+			ctx := context.Background()
+			cluster, err := controller.managementClient.Resource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "clusters"}).Namespace("tenant").Get(ctx, "test", metav1.GetOptions{})
+			require.NoError(t, err)
+			maps := controller.managementClient.Resource(ConfigMaps).Namespace("tenant")
+			object, err := maps.Get(ctx, "test-autoscaler-failover-config", metav1.GetOptions{})
+			require.NoError(t, err)
+			encoded, _, err := unstructured.NestedString(object.Object, "data", "config.json")
+			require.NoError(t, err)
+			var payload map[string]interface{}
+			require.NoError(t, json.Unmarshal([]byte(encoded), &payload))
+			version := scenario.version
+			if version == "" {
+				version = "aiproducer.com/worker-failover/v2"
+			}
+			payload["apiVersion"] = version
+			pairs := payload["pairs"].(map[string]interface{})
+			if scenario.empty {
+				payload["pairs"] = map[string]interface{}{}
+			} else if !scenario.omitIntent {
+				for name, value := range pairs {
+					value.(map[string]interface{})["intent"] = map[string]interface{}{"state": scenario.state, "registrationID": "registration-" + name, "resourceRetirementComplete": scenario.complete}
+					if scenario.nullIntent {
+						value.(map[string]interface{})["intent"] = nil
+					}
+				}
+			}
+			data, err := json.Marshal(payload)
+			require.NoError(t, err)
+			require.NoError(t, unstructured.SetNestedField(object.Object, string(data), "data", "config.json"))
+			_, err = maps.Update(ctx, object, metav1.UpdateOptions{})
+			require.NoError(t, err)
+			configuration, err := ReadConfiguration(ctx, controller.managementClient, cluster)
+			if scenario.valid {
+				require.NoError(t, err)
+				actual, err := json.Marshal(configuration)
+				require.NoError(t, err)
+				assert.JSONEq(t, string(data), string(actual))
+			} else {
+				require.Error(t, err)
+				assert.Nil(t, configuration)
+			}
+		})
+	}
+}
+
 func TestMissingOrChangedConfigurationBlocksSecondaryPoolScaling(t *testing.T) {
 	for _, fault := range []string{"missing-config", "wrong-clusterName", "missing-reference", "changed-after-admission", "other-pair-incomplete"} {
 		statement := map[string]string{

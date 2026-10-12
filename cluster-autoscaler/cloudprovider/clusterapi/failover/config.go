@@ -24,12 +24,11 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 )
 
-// ConfigVersion and the mode constants define the accepted configuration and activation contract.
+// ConfigVersion and LifecycleConfigVersion identify distinct Configuration wire contracts.
+// They do not select the persisted State or nested PairLifecycle schema versions.
 const (
-	ConfigVersion = "aiproducer.com/worker-failover/v1"
-	ModeDisabled  = "disabled"
-	ModeActive    = "active"
-	ModeFreeze    = "freeze"
+	ConfigVersion          = "aiproducer.com/worker-failover/v1"
+	LifecycleConfigVersion = "aiproducer.com/worker-failover/v2"
 )
 
 // Configuration selects failover pairs for one actual Cluster identity.
@@ -46,16 +45,37 @@ type ClusterIdentity struct {
 	UID       types.UID `json:"uid"`
 }
 
+// PairKey and RoleKey are MachinePool annotations that bind explicit configured membership.
+const (
+	PairKey = "aiproducer.com/failover-pair"
+	RoleKey = "aiproducer.com/failover-role"
+)
+
 // ConfiguredPair names the primary and secondary MachinePools selected for one identifier.
 type ConfiguredPair struct {
 	Primary   ConfiguredPool `json:"primary"`
 	Secondary ConfiguredPool `json:"secondary"`
+	Intent    *PairIntent    `json:"intent,omitempty"`
+}
+
+// PairIntent describes the externally owned rollout intent for one registration.
+type PairIntent struct {
+	State                      string `json:"state"`
+	RegistrationID             string `json:"registrationID"`
+	ResourceRetirementComplete bool   `json:"resourceRetirementComplete"`
 }
 
 // ConfiguredPool selects a MachinePool by name in the owning Cluster's namespace.
 type ConfiguredPool struct {
 	Name string `json:"name"`
 }
+
+// ModeDisabled, ModeActive and ModeFreeze control runtime admission, not configuration JSON.
+const (
+	ModeDisabled = "disabled"
+	ModeActive   = "active"
+	ModeFreeze   = "freeze"
+)
 
 // ValidateMode rejects unsupported failover activation modes.
 func ValidateMode(mode string) error {

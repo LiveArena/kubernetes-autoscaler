@@ -30,6 +30,9 @@ const CapabilitiesAPIVersion = "aiproducer.com/autoscaler-capabilities/v1"
 // AzureMachinePoolFailoverCapability identifies compiled Azure MachinePool failover support.
 const AzureMachinePoolFailoverCapability = "azure-machinepool-failover-v1"
 
+// AzureMachinePoolPairLifecycleCapability identifies versioned per-pair lifecycle support.
+const AzureMachinePoolPairLifecycleCapability = "azure-machinepool-pair-lifecycle-v1"
+
 // CapabilityReport separates compiled support, source metadata and configured runtime settings.
 type CapabilityReport struct {
 	APIVersion   string                  `json:"apiVersion"`
@@ -66,7 +69,7 @@ func capabilityReport(build *debug.BuildInfo, provider, mode string, leaderElect
 	report := CapabilityReport{
 		APIVersion:   CapabilitiesAPIVersion,
 		Version:      ClusterAutoscalerVersion,
-		Capabilities: []string{AzureMachinePoolFailoverCapability},
+		Capabilities: []string{AzureMachinePoolFailoverCapability, AzureMachinePoolPairLifecycleCapability},
 		Source:       CapabilitySource{Status: "unknown"},
 		Configured:   CapabilityConfiguration{CloudProvider: provider, FailoverMode: mode, LeaderElection: leaderElection, Readiness: "not-evaluated"},
 	}

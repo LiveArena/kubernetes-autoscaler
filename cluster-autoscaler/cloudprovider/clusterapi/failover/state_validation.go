@@ -18,6 +18,7 @@ package failover
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -26,9 +27,13 @@ func (state *State) Validate(clusterUID types.UID) error {
 	if state.Version != StateVersion || state.ClusterUID != clusterUID || state.Pairs == nil {
 		return fmt.Errorf("unsupported, stale, or unbounded failover state")
 	}
+	members := map[types.UID]string{}
 	for name, pair := range state.Pairs {
 		if !ValidPairIdentifier(name) || pair == nil || pair.RecoveryScans < 0 || pair.RecoveryScans > 1 {
 			return fmt.Errorf("invalid failover pair state")
+		}
+		if pair.Lifecycle != nil && (pair.Lifecycle.Version != LifecycleStateVersion || !ValidPairIdentifier(pair.Lifecycle.RegistrationID) || !validLifecycleState(pair.Lifecycle.State)) {
+			return fmt.Errorf("invalid pair lifecycle status")
 		}
 		if pair.Phase != Healthy && pair.Phase != Degraded && pair.Phase != Recovering {
 			return fmt.Errorf("unknown failover phase")
@@ -48,6 +53,24 @@ func (state *State) Validate(clusterUID types.UID) error {
 			}
 		}
 		for _, role := range []Role{pair.Primary, pair.Secondary} {
+			if pair.Lifecycle != nil {
+				poolVersion, poolError := schema.ParseGroupVersion(role.PoolVersion)
+				infrastructureVersion, infrastructureError := schema.ParseGroupVersion(role.InfrastructureVersion)
+				if role.PoolUID == "" || role.InfrastructureUID == "" || role.PoolName == "" || role.InfrastructureName == "" || poolError != nil || poolVersion.Group == "" || infrastructureError != nil || infrastructureVersion.Group != AzureAPIGroup {
+					return fmt.Errorf("lifecycle state requires complete registered member identities")
+				}
+			} else if role.PoolName != "" || role.PoolVersion != "" || role.InfrastructureName != "" || role.InfrastructureVersion != "" {
+				return fmt.Errorf("lifecycle binding fields require a versioned lifecycle record")
+			}
+			for _, uid := range []types.UID{role.PoolUID, role.InfrastructureUID} {
+				if uid == "" {
+					continue
+				}
+				if previous, found := members[uid]; found {
+					return fmt.Errorf("member UID %q is already registered to pair %q", uid, previous)
+				}
+				members[uid] = name
+			}
 			if role.CheckInterval < 0 || role.CheckInterval > 15*60 || role.ObservedTarget < 0 || role.ReadyCountAtFailure < 0 || role.FailureEpoch < 0 {
 				return fmt.Errorf("invalid failover role state")
 			}

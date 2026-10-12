@@ -32,6 +32,19 @@ import (
 	"testing"
 )
 
+func TestUnpublishedStateFormatStartsAtVersionOneAndRejectsOtherVersions(t *testing.T) {
+	cluster := &unstructured.Unstructured{}
+	cluster.SetUID("cluster-uid")
+	state := NewState(cluster)
+	assert.Equal(t, 1, state.Version)
+	state.Version = 1
+	require.NoError(t, state.Validate(cluster.GetUID()))
+	for _, version := range []int{0, 2, 3, 99} {
+		state.Version = version
+		require.Error(t, state.Validate(cluster.GetUID()), "unpublished schema iterations must not be supported")
+	}
+}
+
 func TestStatePersistenceSurvivesRestartAndFailsClosedOnUnsafeUpdates(t *testing.T) {
 	ctx := context.Background()
 	cluster := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster"}}
@@ -86,16 +99,24 @@ func TestStateReaderRejectsMalformedAmbiguousForeignOrOversizedState(t *testing.
 	for _, scenario := range []struct{ statement, encoded string }{
 		{"MalformedJSONIsRejected", "{"},
 		{"UnknownSchemaVersionIsRejected", `{"version":99,"clusterUID":"cluster-uid","pairs":{}}`},
-		{"UnsupportedLegacySchemaIsRejectedWithoutReset", `{"version":1,"clusterUID":"cluster-uid","pairs":{}}`},
-		{"ForeignClusterStateIsRejected", `{"version":2,"clusterUID":"different","pairs":{}}`},
-		{"NullPairStateIsRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{"lin":null}}`},
-		{"InconsistentDegradationStateIsRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{"lin":{"phase":"Degraded"}}}`},
-		{"UnknownStateFieldsAreRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{},"unknown":true}`},
-		{"TrailingStateJSONIsRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{}} {}`},
-		{"DuplicateSchemaVersionFieldsAreRejected", `{"version":1,"version":2,"clusterUID":"cluster-uid","pairs":{}}`},
-		{"DuplicatePairKeysAreRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Degraded","primary":{"failed":true}},"abc":{"phase":"Healthy"}}}`},
-		{"DuplicateRoleFieldsAreRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","primary":{"failed":true},"primary":{"failed":false}}}}`},
-		{"OversizedValidStateIsRejected", strings.Repeat(" ", StateLimit) + `{"version":2,"clusterUID":"cluster-uid","pairs":{}}`},
+		{"UnpublishedOuterVersionTwoIsRejected", `{"version":2,"clusterUID":"cluster-uid","pairs":{}}`},
+		{"UnpublishedOuterVersionThreeIsRejected", `{"version":3,"clusterUID":"cluster-uid","pairs":{}}`},
+		{"ForeignClusterStateIsRejected", `{"version":1,"clusterUID":"different","pairs":{}}`},
+		{"NullPairStateIsRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"lin":null}}`},
+		{"InconsistentDegradationStateIsRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"lin":{"phase":"Degraded"}}}`},
+		{"UnknownStateFieldsAreRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{},"unknown":true}`},
+		{"TrailingStateJSONIsRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{}} {}`},
+		{"DuplicateSchemaVersionFieldsAreRejected", `{"version":1,"version":1,"clusterUID":"cluster-uid","pairs":{}}`},
+		{"DuplicatePairKeysAreRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Degraded","primary":{"failed":true}},"abc":{"phase":"Healthy"}}}`},
+		{"DuplicateRoleFieldsAreRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","primary":{"failed":true},"primary":{"failed":false}}}}`},
+		{"NullLifecycleFieldsAreRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","lifecycle":null}}}`},
+		{"BindingFieldsRequireLifecycleRecords", `{"version":1,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","primary":{"poolName":"new-lifecycle-field"}}}}`},
+		{"LifecycleRequiresCompleteRegisteredMembers", `{"version":1,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","lifecycle":{"version":1,"state":"Active","registrationID":"registration-abc","operationsSettled":true,"reason":""}}}}`},
+		{"LifecycleRequiresItsOwnVersion", `{"version":1,"clusterUID":"cluster-uid","pairs":{"abc":{"phase":"Healthy","lifecycle":{"state":"Active","registrationID":"registration-abc","operationsSettled":true,"reason":""}}}}`},
+		{"ReusedPrimaryPoolAcrossPairIdentifiersIsRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"old":{"phase":"Healthy","primary":{"poolUID":"shared"}},"new":{"phase":"Healthy","primary":{"poolUID":"shared"}}}}`},
+		{"ReusedMemberAcrossOppositePairRolesIsRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"old":{"phase":"Healthy","primary":{"poolUID":"shared"}},"new":{"phase":"Healthy","secondary":{"poolUID":"shared"}}}}`},
+		{"ReusedInfrastructureAcrossPairIdentifiersIsRejected", `{"version":1,"clusterUID":"cluster-uid","pairs":{"old":{"phase":"Healthy","primary":{"infrastructureUID":"shared"}},"new":{"phase":"Healthy","primary":{"infrastructureUID":"shared"}}}}`},
+		{"OversizedValidStateIsRejected", strings.Repeat(" ", StateLimit) + `{"version":1,"clusterUID":"cluster-uid","pairs":{}}`},
 	} {
 		t.Run(scenario.statement, func(t *testing.T) {
 			cluster := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster"}}

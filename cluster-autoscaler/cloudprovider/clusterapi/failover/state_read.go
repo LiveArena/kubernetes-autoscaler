@@ -58,6 +58,9 @@ func (store *Store) Load(ctx context.Context, cluster *unstructured.Unstructured
 	if len(strictErrors) > 0 {
 		return nil, nil, fmt.Errorf("invalid failover state fields: %v", strictErrors)
 	}
+	if err := validateStateFields(encoded); err != nil {
+		return nil, nil, err
+	}
 	if err := state.Validate(cluster.GetUID()); err != nil {
 		return nil, nil, err
 	}

@@ -38,6 +38,8 @@ func (writer *Policy) IncreaseSize(group Group, delta int, scales scale.ScalesGe
 		return true, fmt.Errorf("failover writer has stopped")
 	}
 	defer writer.WriterOperations.Done()
+	finishPairOperation := writer.beginPairOperation(group.Id())
+	defer finishPairOperation()
 	ctx := writer.RequestContext()
 	if err := writer.AssertWriter(ctx, group); err != nil {
 		return true, err
@@ -83,6 +85,9 @@ func (writer *Policy) IncreaseSize(group Group, delta int, scales scale.ScalesGe
 		return true, err
 	}
 	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	if err := writer.assertCurrentLifecycleAdmission(group); err != nil {
 		return true, err
 	}
 	current.Spec.Replicas += int32(delta)

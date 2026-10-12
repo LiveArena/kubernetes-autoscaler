@@ -18,14 +18,71 @@ package clusterapi
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"testing"
 	"time"
 )
+
+func TestActualProviderRevalidatesPairLifecycleBeforeCachedScaleWrites(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	provider := &provider{controller: controller}
+	ctx := context.Background()
+	maps := controller.managementClient.Resource(failover.ConfigMaps).Namespace("tenant")
+	setIntent := func(identifier, desired string) {
+		object, err := maps.Get(ctx, "test-autoscaler-failover-config", metav1.GetOptions{})
+		require.NoError(t, err)
+		encoded, _, err := unstructured.NestedString(object.Object, "data", "config.json")
+		require.NoError(t, err)
+		configuration := failover.Configuration{}
+		require.NoError(t, json.Unmarshal([]byte(encoded), &configuration))
+		configuration.APIVersion = failover.LifecycleConfigVersion
+		for name, pair := range configuration.Pairs {
+			if pair.Intent == nil {
+				pair.Intent = &failover.PairIntent{State: "Creating", RegistrationID: "registration-" + name}
+			}
+			if identifier == name {
+				pair.Intent.State = desired
+			}
+			configuration.Pairs[name] = pair
+		}
+		data, err := json.Marshal(configuration)
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedField(object.Object, string(data), "data", "config.json"))
+		_, err = maps.Update(ctx, object, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+	setIntent("lin", "Creating")
+	require.NoError(t, provider.Refresh())
+	setIntent("lin", "Active")
+	setIntent("win2", "Active")
+	require.NoError(t, provider.Refresh())
+	var primary *nodegroup
+	for _, candidate := range provider.NodeGroups() {
+		group := candidate.(*nodegroup)
+		if group.Object().GetName() == "lin-primary" {
+			primary = group
+		}
+	}
+	require.NotNil(t, primary)
+	setIntent("lin", "Retiring")
+	require.Error(t, primary.IncreaseSize(1))
+	target, err := primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 3, target)
+	require.NoError(t, provider.Refresh())
+	for _, candidate := range provider.NodeGroups() {
+		group := candidate.(*nodegroup)
+		if group.Object().GetName() == "win2-primary" {
+			require.NoError(t, group.IncreaseSize(1))
+		}
+	}
+}
 
 func TestOnlyLiveAMPMsOwnedBySelectedInfrastructureExcludeRegisteredCapacity(t *testing.T) {
 	for _, scenario := range []string{"selected-owner", "wrong-owner", "deleting"} {

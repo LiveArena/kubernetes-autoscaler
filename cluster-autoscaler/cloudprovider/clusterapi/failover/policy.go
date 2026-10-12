@@ -49,6 +49,8 @@ type Policy struct {
 	Overflow          bool
 	OverflowVersion   uint64
 	Handler           cache.ResourceEventHandlerRegistration
+	LifecycleClusters map[string]*unstructured.Unstructured
+	PairOperations    map[string]int
 }
 
 // Observe retains the newest terminal failure per AMP owner in a bounded buffer.

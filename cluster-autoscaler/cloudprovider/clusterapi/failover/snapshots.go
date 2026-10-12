@@ -46,5 +46,12 @@ func (policy *Policy) publishPair(name string, pair *Pair, primary, secondary *M
 			ConsiderPrimaryUnfit: role == "secondary" && !policy.Frozen && !pair.Secondary.Failed && pair.SecondaryRequest == nil && pair.FallbackAllowance == 0 &&
 				(pair.PrimaryRequest == nil && primary.Target < primary.Group.MaxSize() || pair.PrimaryRequest != nil && primary.Target == pair.PrimaryRequest.ToTarget),
 		}
+		if pair.Lifecycle != nil && pair.Lifecycle.State != "Active" {
+			snapshot := policies[member.Group.Id()]
+			snapshot.ScaleUpBlocked = true
+			snapshot.ConsiderPrimaryUnfit = false
+			snapshot.Reason = "pair lifecycle " + pair.Lifecycle.State
+			policies[member.Group.Id()] = snapshot
+		}
 	}
 }

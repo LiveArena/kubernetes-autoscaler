@@ -55,6 +55,9 @@ func (store *Store) Reconcile(ctx context.Context, cluster *unstructured.Unstruc
 		if err := state.Validate(cluster.GetUID()); err != nil {
 			return err
 		}
+		if err := store.validateLifecycleUpdate(ctx, cluster, before, state); err != nil {
+			return err
+		}
 		encoded, err := json.Marshal(state)
 		if err != nil || len(encoded) > StateLimit {
 			return fmt.Errorf("failover state cannot be encoded within its bound")

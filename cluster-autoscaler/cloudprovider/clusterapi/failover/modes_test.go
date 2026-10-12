@@ -142,7 +142,7 @@ func TestInitialActivationCreatesStateWithoutChangingPoolsOrNodes(t *testing.T) 
 				require.NoError(t, err)
 				state, _, err := controller.failover.Store.Load(context.Background(), cluster)
 				require.NoError(t, err)
-				assert.Equal(t, 2, state.Version)
+				assert.Equal(t, StateVersion, state.Version)
 				require.Len(t, state.Pairs, 2)
 				for _, pair := range state.Pairs {
 					assert.Equal(t, Healthy, pair.Phase)

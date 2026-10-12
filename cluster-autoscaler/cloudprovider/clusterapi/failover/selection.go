@@ -57,6 +57,16 @@ func (policy *Policy) ConfiguredMembers(ctx context.Context, available map[strin
 			klog.Warningf("Failover configuration %s/%s unavailable: %v", cluster.GetNamespace(), cluster.GetName(), err)
 			continue
 		}
+		if configuration.APIVersion == LifecycleConfigVersion {
+			policy.Lock()
+			if policy.LifecycleClusters == nil {
+				policy.LifecycleClusters = map[string]*unstructured.Unstructured{}
+			}
+			policy.LifecycleClusters[key] = cluster.DeepCopy()
+			policy.Unlock()
+			result[key] = policy.configuredLifecycleMembers(ctx, cluster, configuration, candidates, policies)
+			continue
+		}
 		resolved, err := policy.ResolveConfiguredPools(ctx, cluster, configuration)
 		if err != nil {
 			BlockMembers(candidates, policies, err)

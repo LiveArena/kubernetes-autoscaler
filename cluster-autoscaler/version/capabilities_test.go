@@ -33,7 +33,8 @@ func TestCapabilityReportUsesEmbeddedSourceWithoutClaimingRuntimeReadiness(t *te
 	build, _ := debug.ReadBuildInfo()
 	assert.Equal(t, capabilityReport(build, "clusterapi", "freeze", true), report)
 	assert.Equal(t, "not-evaluated", report.Configured.Readiness)
-	assert.Equal(t, []string{AzureMachinePoolFailoverCapability}, report.Capabilities)
+	assert.Contains(t, report.Capabilities, AzureMachinePoolFailoverCapability)
+	assert.Contains(t, report.Capabilities, "azure-machinepool-pair-lifecycle-v1")
 }
 
 func TestCapabilitySourceMetadataDistinguishesCleanDirtyAndUnknownBuilds(t *testing.T) {
@@ -60,7 +61,8 @@ func TestCapabilitySourceMetadataDistinguishesCleanDirtyAndUnknownBuilds(t *test
 				}
 			}
 			report := capabilityReport(build, "clusterapi", "disabled", true)
-			assert.Equal(t, []string{AzureMachinePoolFailoverCapability}, report.Capabilities)
+			assert.Contains(t, report.Capabilities, AzureMachinePoolFailoverCapability)
+			assert.Contains(t, report.Capabilities, "azure-machinepool-pair-lifecycle-v1")
 			assert.Equal(t, "not-evaluated", report.Configured.Readiness)
 			if scenario == "clean" || scenario == "dirty" {
 				assert.Equal(t, "available", report.Source.Status)

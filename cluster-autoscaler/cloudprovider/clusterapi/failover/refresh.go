@@ -63,6 +63,7 @@ func (policy *Policy) Refresh() {
 		annotations := group.Object().GetAnnotations()
 		pair, role := annotations[PairKey], annotations[RoleKey]
 		if pair == "" && role == "" {
+			policy.rememberUnpairedLifecycleCluster(ctx, group)
 			continue
 		}
 		fallback := previousPolicies[group.Id()]
@@ -107,7 +108,19 @@ func (policy *Policy) Refresh() {
 			}
 			var state *State
 			state, err := policy.Store.Reconcile(ctx, primary.Cluster, func(state *State) error {
-				return policy.reconcilePair(state, name, primary, secondary, pairObservations, now)
+				if err := policy.reconcilePairLifecycle(state, name, primary, secondary); err != nil {
+					return err
+				}
+				if pair := state.Pairs[name]; pair != nil && pair.Lifecycle != nil && pair.Lifecycle.State == "Retiring" {
+					return policy.observeRetiringPair(pair, primary, secondary, pairObservations, now)
+				}
+				if err := policy.reconcilePair(state, name, primary, secondary, pairObservations, now); err != nil {
+					return err
+				}
+				if pair := state.Pairs[name]; pair.Lifecycle != nil {
+					pair.Lifecycle.OperationsSettled = pair.PrimaryRequest == nil && pair.SecondaryRequest == nil && policy.pairOperationsSettled(primary.Cluster, pair)
+				}
+				return nil
 			})
 			if err != nil {
 				resynchronized = false
@@ -118,6 +131,7 @@ func (policy *Policy) Refresh() {
 			policy.publishPair(name, state.Pairs[name], primary, secondary, pairObservations, policies)
 		}
 	}
+	policy.reconcileRetiringPairs()
 	policy.Lock()
 	if policy.Overflow {
 		if overflow && resynchronized && policy.OverflowVersion == overflowVersion {

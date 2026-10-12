@@ -16,6 +16,11 @@ limitations under the License.
 
 package failover
 
+import "k8s.io/apimachinery/pkg/runtime/schema"
+
+// ConfigMaps identifies the management API resource used for configuration and state.
+var ConfigMaps = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+
 // MachinePoolKind and related constants identify supported resources and sizing metadata.
 const (
 	MachinePoolKind      = "MachinePool"

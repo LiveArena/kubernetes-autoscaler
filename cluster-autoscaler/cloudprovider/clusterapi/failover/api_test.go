@@ -27,74 +27,20 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/scale"
 	clocktesting "k8s.io/utils/clock/testing"
-	"os"
 	"testing"
 	"time"
 )
 
-func failoverTestCRD(plural, kind string, withScale bool) *unstructured.Unstructured {
-	version := map[string]interface{}{"name": "v1beta2", "served": true, "storage": true, "schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"spec": map[string]interface{}{"type": "object", "x-kubernetes-preserve-unknown-fields": true, "properties": map[string]interface{}{"replicas": map[string]interface{}{"type": "integer", "format": "int32", "minimum": int64(0)}}}, "status": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"replicas": map[string]interface{}{"type": "integer", "format": "int32"}}}}}}}
-	if withScale {
-		version["subresources"] = map[string]interface{}{"scale": map[string]interface{}{"specReplicasPath": ".spec.replicas", "statusReplicasPath": ".status.replicas"}}
-	}
-	return &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "metadata": map[string]interface{}{"name": plural + ".cluster.x-k8s.io"}, "spec": map[string]interface{}{"group": "cluster.x-k8s.io", "scope": "Namespaced", "names": map[string]interface{}{"plural": plural, "singular": plural[:len(plural)-1], "kind": kind, "listKind": kind + "List"}, "versions": []interface{}{version}}}}
-}
 func TestDisposableAPIEnforcesScopedPermissionsStateCASAndNonreplayedScaleWrites(t *testing.T) {
-	endpoint := os.Getenv("INF761_TEST_API")
-	if endpoint == "" || os.Getenv("INF761_TEST_API_DISPOSABLE") != "1" {
-		t.Skip("requires an explicitly authorized disposable API via INF761_TEST_API and INF761_TEST_API_DISPOSABLE=1")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	configuration := &rest.Config{Host: endpoint, BearerToken: "inf761-admin", TLSClientConfig: rest.TLSClientConfig{Insecure: true}, Timeout: 10 * time.Second}
-	client, err := dynamic.NewForConfig(configuration)
-	require.NoError(t, err)
-	discoveryClient, err := discovery.NewDiscoveryClientForConfig(configuration)
-	require.NoError(t, err)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, time.Minute, true, func(ctx context.Context) (bool, error) {
-		_, err := discoveryClient.ServerVersion()
-		return err == nil, nil
-	}))
-	crds := client.Resource(schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"})
-	infrastructureDefinition := failoverTestCRD("azuremachinepools", "AzureMachinePool", false)
-	infrastructureDefinition.SetName("azuremachinepools." + azureMachinePoolMachineApiGroup)
-	require.NoError(t, unstructured.SetNestedField(infrastructureDefinition.Object, azureMachinePoolMachineApiGroup, "spec", "group"))
-	for _, definition := range []*unstructured.Unstructured{failoverTestCRD("clusters", "Cluster", false), failoverTestCRD("machinepools", "MachinePool", true), infrastructureDefinition} {
-		_, err := crds.Create(ctx, definition, metav1.CreateOptions{})
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			_ = crds.Delete(context.Background(), definition.GetName(), metav1.DeleteOptions{})
-		})
-	}
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		resources, err := discoveryClient.ServerResourcesForGroupVersion("cluster.x-k8s.io/v1beta2")
-		if err != nil {
-			return false, nil
-		}
-		for _, resource := range resources.APIResources {
-			if resource.Name == "machinepools/scale" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}))
-	namespaces := client.Resource(schema.GroupVersionResource{Version: "v1", Resource: "namespaces"})
-	namespace, err := namespaces.Create(ctx, &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]interface{}{"generateName": "inf761-"}}}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = namespaces.Delete(context.Background(), namespace.GetName(), metav1.DeleteOptions{})
-	})
-	cluster := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "cluster.x-k8s.io/v1beta2", "kind": "Cluster", "metadata": map[string]interface{}{"name": "test", "namespace": namespace.GetName()}}}
-	clusterResource := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "clusters"}
-	cluster, err = client.Resource(clusterResource).Namespace(namespace.GetName()).Create(ctx, cluster, metav1.CreateOptions{})
-	require.NoError(t, err)
+	api := newDisposableAPIFixture(t)
+	ctx, client, configuration := api.context, api.client, api.configuration
+	discoveryClient, namespace, cluster := api.discovery, api.namespace, api.cluster
 	store := &Store{Client: client}
 	state, err := store.Reconcile(ctx, cluster, func(state *State) error {
 		state.Pairs["lin"] = &Pair{Phase: Degraded, Primary: Role{Failed: true, ObservedTarget: 3}, FallbackAllowance: 2}
@@ -188,12 +134,21 @@ func TestDisposableAPIEnforcesScopedPermissionsStateCASAndNonreplayedScaleWrites
 	infrastructure.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: pool.GetAPIVersion(), Kind: machinePoolKind, Name: pool.GetName(), UID: pool.GetUID()}})
 	infrastructureResource := client.Resource(schema.GroupVersionResource{Group: azureMachinePoolMachineApiGroup, Version: "v1beta2", Resource: "azuremachinepools"}).Namespace(namespace.GetName())
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		_, err := infrastructureResource.Create(ctx, infrastructure, metav1.CreateOptions{})
+		created, err := infrastructureResource.Create(ctx, infrastructure, metav1.CreateOptions{})
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
+		if err == nil {
+			infrastructure = created
+		}
 		return err == nil, err
 	}))
+	_, err = store.Reconcile(ctx, cluster, func(state *State) error {
+		state.Pairs["lin"].Secondary.PoolUID = pool.GetUID()
+		state.Pairs["lin"].Secondary.InfrastructureUID = infrastructure.GetUID()
+		return nil
+	})
+	require.NoError(t, err)
 	scaleClient, err := scale.NewForConfig(scopedConfiguration, restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(discoveryClient)), dynamic.LegacyAPIPathResolverFunc, scale.NewDiscoveryScaleKindResolver(discoveryClient))
 	require.NoError(t, err)
 	clock := clocktesting.NewFakeClock(now)
