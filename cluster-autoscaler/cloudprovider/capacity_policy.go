@@ -27,6 +27,7 @@ type NodeGroupCapacityPolicy struct {
 	RequireFullScaleUp    bool
 	ReliableUnregistered  int
 	ScaleUpLimit          int
+	ScaleUpDemandOffset   int
 	ScaleDownPair         string
 	ScaleDownSecondary    bool
 	PrimaryNodeGroupID    string

@@ -51,7 +51,7 @@ func (policy *Policy) ConfiguredMembers(ctx context.Context, available map[strin
 			cluster = member.Cluster
 			break
 		}
-		configuration, err := ReadConfiguration(ctx, policy.Store.Client, cluster)
+		configuration, err := readScanConfiguration(ctx, policy.Store.Client, cluster)
 		if err != nil {
 			BlockMembers(candidates, policies, err)
 			klog.Warningf("Failover configuration %s/%s unavailable: %v", cluster.GetNamespace(), cluster.GetName(), err)

@@ -55,19 +55,19 @@ func (policy *Policy) configuredLifecycleMembers(ctx context.Context, cluster *u
 }
 
 func (policy *Policy) rememberUnpairedLifecycleCluster(ctx context.Context, group Group) {
-	member, err := policy.Member(ctx, group)
+	cluster, err := policy.owningCluster(ctx, group)
 	if err != nil {
 		return
 	}
-	configuration, err := ReadConfiguration(ctx, policy.Store.Client, member.Cluster)
+	configuration, err := readScanConfiguration(ctx, policy.Store.Client, cluster)
 	if err != nil || configuration.APIVersion != LifecycleConfigVersion {
 		return
 	}
-	key := member.Cluster.GetNamespace() + "/" + string(member.Cluster.GetUID())
+	key := cluster.GetNamespace() + "/" + string(cluster.GetUID())
 	policy.Lock()
 	if policy.LifecycleClusters == nil {
 		policy.LifecycleClusters = map[string]*unstructured.Unstructured{}
 	}
-	policy.LifecycleClusters[key] = member.Cluster.DeepCopy()
+	policy.LifecycleClusters[key] = cluster.DeepCopy()
 	policy.Unlock()
 }

@@ -26,16 +26,15 @@ import (
 	"k8s.io/klog/v2"
 )
 
-func (policy *Policy) reconcileRetiringPairs() {
+func (policy *Policy) reconcileRetiringPairs(ctx context.Context) {
 	policy.RLock()
 	clusters := make([]*unstructured.Unstructured, 0, len(policy.LifecycleClusters))
 	for _, cluster := range policy.LifecycleClusters {
 		clusters = append(clusters, cluster.DeepCopy())
 	}
 	policy.RUnlock()
-	ctx := policy.RequestContext()
 	for _, cluster := range clusters {
-		configuration, err := ReadConfiguration(ctx, policy.Store.Client, cluster)
+		configuration, err := readScanConfiguration(ctx, policy.Store.Client, cluster)
 		if err != nil || configuration.APIVersion != LifecycleConfigVersion {
 			continue
 		}

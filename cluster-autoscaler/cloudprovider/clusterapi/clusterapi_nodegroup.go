@@ -67,8 +67,8 @@ func (ng *nodegroup) MaxSize() int {
 // (new nodes finish startup and registration or removed nodes are
 // deleted completely). Implementation required.
 func (ng *nodegroup) TargetSize() (int, error) {
-	if ng.GetCapacityPolicy().ExpectedTarget != nil {
-		return ng.scalableResource.Replicas()
+	if policy := ng.GetCapacityPolicy(); policy.ExpectedTarget != nil {
+		return *policy.ExpectedTarget, nil
 	}
 	replicas, found, err := unstructured.NestedInt64(ng.scalableResource.unstructured.Object, "spec", "replicas")
 	if err != nil {

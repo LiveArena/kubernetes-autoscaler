@@ -41,7 +41,7 @@ func (pair *Pair) ExpirePrimaryTrial(primary *Member, now time.Time) bool {
 	if request == nil || request.Deadline == nil || primary.Target != request.ToTarget || now.Before(request.Deadline.Time) {
 		return false
 	}
-	pair.FallbackAllowance = pair.ReliablePrimaryGap(primary)
+	pair.FallbackAllowance = min(max(0, primary.Target-len(primary.Ready)), pair.FallbackAllowance+pair.ReliablePrimaryGap(primary))
 	pair.PrimaryRequest = nil
 	pair.Phase = Degraded
 	pair.RecoveryScans = 0

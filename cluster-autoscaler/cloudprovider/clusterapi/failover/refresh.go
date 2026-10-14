@@ -28,7 +28,7 @@ func (policy *Policy) Refresh() {
 		return
 	}
 	defer policy.WriterOperations.Done()
-	ctx := policy.RequestContext()
+	ctx := withScanReads(policy.RequestContext())
 	now := policy.Clock.Now()
 	groups, err := policy.Environment.NodeGroups()
 	if err != nil {
@@ -121,7 +121,7 @@ func (policy *Policy) Refresh() {
 			}
 			var state *State
 			state, err := policy.Store.Reconcile(ctx, primary.Cluster, func(state *State) error {
-				if err := policy.reconcilePairLifecycle(state, name, primary, secondary); err != nil {
+				if err := policy.reconcilePairLifecycle(ctx, state, name, primary, secondary); err != nil {
 					return err
 				}
 				if pair := state.Pairs[name]; pair != nil && pair.Lifecycle != nil && pair.Lifecycle.State == "Retiring" {
@@ -144,7 +144,7 @@ func (policy *Policy) Refresh() {
 			policy.publishPair(name, state.Pairs[name], primary, secondary, pairObservations, policies)
 		}
 	}
-	policy.reconcileRetiringPairs()
+	policy.reconcileRetiringPairs(ctx)
 	policy.Lock()
 	if policy.Overflow {
 		if overflow && resynchronized && policy.OverflowVersion == overflowVersion {

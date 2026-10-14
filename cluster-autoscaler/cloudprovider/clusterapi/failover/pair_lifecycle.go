@@ -16,7 +16,10 @@ limitations under the License.
 
 package failover
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // LifecycleStateVersion identifies the independently versioned PairLifecycle JSON format.
 const LifecycleStateVersion = 1
@@ -34,8 +37,8 @@ func validLifecycleState(state string) bool {
 	return state == "Creating" || state == "Active" || state == "Retiring" || state == "Retired"
 }
 
-func (policy *Policy) reconcilePairLifecycle(state *State, name string, primary, secondary *Member) error {
-	configuration, err := ReadConfiguration(policy.RequestContext(), policy.Store.Client, primary.Cluster)
+func (policy *Policy) reconcilePairLifecycle(ctx context.Context, state *State, name string, primary, secondary *Member) error {
+	configuration, err := readScanConfiguration(ctx, policy.Store.Client, primary.Cluster)
 	if err != nil {
 		return err
 	}

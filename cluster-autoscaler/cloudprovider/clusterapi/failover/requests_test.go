@@ -45,6 +45,43 @@ func TestSecondaryPoolFailureDoesNotBlockPrimaryPoolAdmission(t *testing.T) {
 	assert.True(t, blocked, "secondary failure must continue blocking new secondary requests")
 }
 
+func TestOverlappingPrimaryTrialsPreserveOnlyUnmetFallbackAllowance(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	for _, scenario := range []struct{ outcome, statement string }{
+		{"arrival", "FreshPrimaryArrivalPreservesPriorUnmetFallback"},
+		{"failure", "FreshPrimaryFailureAddsOnlyItsBoundedIncrementOnce"},
+		{"deadline", "ExpiredPrimaryTrialPreservesPriorUnmetFallback"},
+		{"secondary-commit", "SecondaryCommitConsumesOnlyItsOwnIncrement"},
+	} {
+		t.Run(scenario.statement, func(t *testing.T) {
+			deadline := metav1.NewTime(now.Add(time.Minute))
+			pair := &Pair{Phase: Degraded, Primary: Role{Failed: true}, FallbackAllowance: 2,
+				PrimaryRequest: &Request{FromTarget: 3, ToTarget: 4, Started: metav1.NewTime(now), Deadline: &deadline, ReadyAtStart: 1, ReadyFingerprint: ReadyFingerprint([]string{"occupied"}), FailureUIDAtStart: "old"}}
+			expected := 3
+			switch scenario.outcome {
+			case "arrival":
+				pair.CompletePrimaryArrival([]string{"occupied", "fresh-arrival"}, 4)
+				expected = 2
+			case "failure":
+				failure := FailureObservation{UID: "fresh-failure", Created: metav1.NewTime(now.Add(time.Second))}
+				pair.AcceptPrimaryFailure(failure, true, 4, 1)
+				pair.AcceptPrimaryFailure(failure, true, 4, 1)
+			case "deadline":
+				assert.True(t, pair.ExpirePrimaryTrial(&Member{Target: 4, Ready: []string{"occupied"}}, deadline.Time))
+			case "secondary-commit":
+				pair.PrimaryRequest = nil
+				pair.FallbackAllowance = 3
+				pair.SecondaryRequest = &Request{FromTarget: 0, ToTarget: 2, Started: metav1.NewTime(now)}
+				require.NoError(t, pair.ReconcileRequestTargets(4, 2))
+				assert.Nil(t, pair.SecondaryRequest)
+				expected = 1
+			}
+			assert.Nil(t, pair.PrimaryRequest)
+			assert.Equal(t, expected, pair.FallbackAllowance)
+		})
+	}
+}
+
 func TestSecondaryPoolFailureDoesNotBlockPrimaryPoolScaling(t *testing.T) {
 	controller, clock := newFailoverTestController(t)
 	provider := &testProvider{controller: controller}

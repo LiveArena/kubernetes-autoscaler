@@ -36,11 +36,15 @@ func (policy *Policy) publishPair(name string, pair *Pair, primary, secondary *M
 		if role == "primary" && reliable > 0 {
 			reliable = pair.ReliablePrimaryGap(primary)
 		}
+		demandOffset := 0
+		if role == "primary" && pair.PrimaryRequest == nil {
+			demandOffset = pair.FallbackAllowance
+		}
 		policies[member.Group.Id()] = cloudprovider.NodeGroupCapacityPolicy{
 			BlockUnregistered: record.Failed, FailedRegisteredNodes: member.FailedNodes,
 			RetainTarget: record.Failed, ScaleUpBlocked: blocked, Reason: "failover " + pair.Phase,
 			ExpectedTarget: &member.Target, RequireFullScaleUp: role == "secondary",
-			ReliableUnregistered: reliable, ScaleUpLimit: limit,
+			ReliableUnregistered: reliable, ScaleUpLimit: limit, ScaleUpDemandOffset: demandOffset,
 			ScaleDownPair:      member.Cluster.GetNamespace() + "/" + string(member.Cluster.GetUID()) + "/" + name,
 			ScaleDownSecondary: role == "secondary", PrimaryNodeGroupID: primary.Group.Id(),
 			ConsiderPrimaryUnfit: role == "secondary" && !policy.Frozen && !pair.Secondary.Failed && pair.SecondaryRequest == nil && pair.FallbackAllowance == 0 &&

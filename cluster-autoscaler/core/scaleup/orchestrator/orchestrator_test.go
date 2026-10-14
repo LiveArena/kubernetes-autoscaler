@@ -85,6 +85,43 @@ func (group *primaryFitTestGroup) AllowPrimaryFitFallback(reason string) error {
 	return nil
 }
 
+func TestBoundedExpansionCapsPartialRequestsButRejectsIncompleteFullRequests(t *testing.T) {
+	for _, scenario := range []struct {
+		statement string
+		full      bool
+		atomic    bool
+		offset    int
+	}{
+		{"NonAtomicRequestProgressesWithinItsBoundedWindow", false, false, 0},
+		{"FullRequestIsNotTruncatedToItsBoundedWindow", true, false, 0},
+		{"AtomicRequestCannotApplyAPartialDemandOffset", false, true, 1},
+	} {
+		t.Run(scenario.statement, func(t *testing.T) {
+			provider := testprovider.NewTestCloudProviderBuilder().WithOnScaleUp(func(string, int) error { return nil }).Build()
+			provider.AddNodeGroup("bounded", 0, 10, 1)
+			listers := kube_util.NewListerRegistry(nil, nil, kube_util.NewTestPodLister(nil), nil, nil, nil, nil, nil, nil)
+			ctx, err := NewScaleTestAutoscalingContext(defaultOptions, &fake.Clientset{}, listers, provider, nil, nil)
+			assert.NoError(t, err)
+			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(nil, nil, nil))
+			registry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{}, ctx.LogRecorder, NewBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 15 * time.Minute}), asyncnodegroups.NewDefaultAsyncNodeGroupStateChecker())
+			engine := New()
+			engine.Initialize(&ctx, processors.DefaultProcessors(defaultOptions), registry, newEstimatorBuilder(), taints.TaintConfig{})
+			group := &primaryFitTestGroup{NodeGroup: provider.GetNodeGroup("bounded"), policy: cloudprovider.NodeGroupCapacityPolicy{ScaleUpLimit: 2, RequireFullScaleUp: scenario.full, ScaleUpDemandOffset: scenario.offset}}
+			templates := map[string]*framework.NodeInfo{"bounded": framework.NewTestNodeInfo(BuildTestNode("bounded-template", 1000, 10000))}
+			pods := []*apiv1.Pod{BuildTestPod("pending-1", 900, 100), BuildTestPod("pending-2", 900, 100), BuildTestPod("pending-3", 900, 100)}
+			groups := map[string][]estimator.PodEquivalenceGroup{"bounded": {{Pods: pods}}}
+			option := engine.ComputeExpansionOption(group, groups, templates, 1, time.Now(), scenario.atomic)
+			if scenario.full || scenario.atomic {
+				assert.Zero(t, option.NodeCount)
+				assert.Empty(t, option.Pods)
+			} else {
+				assert.Equal(t, 2, option.NodeCount)
+				assert.NotEmpty(t, option.Pods)
+			}
+		})
+	}
+}
+
 func TestPrimaryFitProbesPreservePendingPodStatusAndSharedSchedulingErrors(t *testing.T) {
 	for _, demand := range []struct {
 		statement string

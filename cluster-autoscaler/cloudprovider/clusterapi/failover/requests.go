@@ -31,7 +31,7 @@ func (pair *Pair) ReconcileRequestTargets(primaryTarget, secondaryTarget int) er
 		}
 	}
 	if pair.SecondaryRequest != nil && secondaryTarget == pair.SecondaryRequest.ToTarget {
-		pair.FallbackAllowance = 0
+		pair.FallbackAllowance = max(0, pair.FallbackAllowance-(pair.SecondaryRequest.ToTarget-pair.SecondaryRequest.FromTarget))
 		pair.SecondaryRequest = nil
 	}
 	return nil
@@ -41,7 +41,7 @@ func (pair *Pair) ReconcileRequestTargets(primaryTarget, secondaryTarget int) er
 func (pair *Pair) AcceptPrimaryFailure(observation FailureObservation, alreadyFailed bool, target, ready int) {
 	if request := pair.PrimaryRequest; request != nil {
 		if target == request.ToTarget && observation.UID != request.FailureUIDAtStart && observation.Created.Time.After(request.Started.Time) {
-			pair.FallbackAllowance = request.ToTarget - request.FromTarget
+			pair.FallbackAllowance = min(max(0, target-ready), pair.FallbackAllowance+request.ToTarget-request.FromTarget)
 			pair.PrimaryRequest = nil
 		}
 		return
@@ -56,8 +56,8 @@ func (pair *Pair) CompletePrimaryArrival(ready []string, target int) {
 	request := pair.PrimaryRequest
 	if request != nil && target == request.ToTarget && len(ready) >= request.ReadyAtStart+request.ToTarget-request.FromTarget && ReadyFingerprint(ready) != request.ReadyFingerprint {
 		pair.PrimaryRequest = nil
-		pair.FallbackAllowance = 0
-		if pair.SecondaryRequest != nil && pair.SecondaryRequest.PrimaryUnavailableReason == "" && pair.Secondary.ObservedTarget == pair.SecondaryRequest.FromTarget {
+		pair.FallbackAllowance = min(pair.FallbackAllowance, max(0, target-len(ready)))
+		if pair.FallbackAllowance == 0 && pair.SecondaryRequest != nil && pair.SecondaryRequest.PrimaryUnavailableReason == "" && pair.Secondary.ObservedTarget == pair.SecondaryRequest.FromTarget {
 			pair.SecondaryRequest = nil
 		}
 	}
@@ -66,11 +66,14 @@ func (pair *Pair) CompletePrimaryArrival(ready []string, target int) {
 // RequestAdmission computes role-specific growth blocking, incoming credit and request limits.
 func (pair *Pair) RequestAdmission(role string, primaryTarget, primaryMaximum int, frozen bool) (blocked bool, reliable, limit int) {
 	if role == "secondary" {
-		if frozen || pair.Secondary.Failed || pair.PrimaryRequest != nil && (pair.SecondaryRequest == nil || pair.SecondaryRequest.PrimaryUnavailableReason == "") {
+		if frozen || pair.Secondary.Failed || pair.PrimaryRequest != nil && pair.FallbackAllowance == 0 && (pair.SecondaryRequest == nil || pair.SecondaryRequest.PrimaryUnavailableReason == "") {
 			return true, 0, 0
 		}
 		if pair.SecondaryRequest != nil {
 			return false, 0, pair.SecondaryRequest.ToTarget - pair.SecondaryRequest.FromTarget
+		}
+		if primaryTarget >= primaryMaximum {
+			return false, 0, 0
 		}
 		if pair.FallbackAllowance > 0 {
 			return false, 0, pair.FallbackAllowance
@@ -83,7 +86,7 @@ func (pair *Pair) RequestAdmission(role string, primaryTarget, primaryMaximum in
 		}
 		return true, request.ToTarget - request.FromTarget, 0
 	}
-	return pair.FallbackAllowance > 0 || pair.SecondaryRequest != nil || primaryTarget >= primaryMaximum, 0, 0
+	return pair.SecondaryRequest != nil || primaryTarget >= primaryMaximum, 0, 0
 }
 
 // ReliablePrimaryGap subtracts new Ready and viable registered arrivals from the trial increment.

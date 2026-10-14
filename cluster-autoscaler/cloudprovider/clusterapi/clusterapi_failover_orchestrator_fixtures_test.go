@@ -19,8 +19,8 @@ package clusterapi
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,26 +29,19 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
-	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/actuation"
-	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/deletiontracker"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup/orchestrator"
-	coretest "k8s.io/autoscaler/cluster-autoscaler/core/test"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroupconfig"
-	processorstest "k8s.io/autoscaler/cluster-autoscaler/processors/test"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
-	simulatoroptions "k8s.io/autoscaler/cluster-autoscaler/simulator/options"
-	kubeutils "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/taints"
 	testutils "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	fakekube "k8s.io/client-go/kubernetes/fake"
 	fakescale "k8s.io/client-go/scale/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	clocktesting "k8s.io/utils/clock/testing"
 	"strings"
@@ -58,7 +51,7 @@ import (
 
 type failoverOrchestratorFixture struct {
 	t                  *testing.T
-	pair, outcome      string
+	pair               string
 	disableAccounting  bool
 	controller         *machineController
 	clock              *clocktesting.FakeClock
@@ -74,8 +67,8 @@ type failoverOrchestratorFixture struct {
 	attempts           dynamic.ResourceInterface
 }
 
-func newFailoverOrchestratorFixture(t *testing.T, pair, outcome string, disableAccounting bool) *failoverOrchestratorFixture {
-	fixture := &failoverOrchestratorFixture{t: t, pair: pair, outcome: outcome, disableAccounting: disableAccounting}
+func newFailoverOrchestratorFixture(t *testing.T, pair string, disableAccounting bool) *failoverOrchestratorFixture {
+	fixture := &failoverOrchestratorFixture{t: t, pair: pair, disableAccounting: disableAccounting}
 	fixture.controller, fixture.clock = newFailoverTestController(t)
 	fixture.provider = &provider{controller: fixture.controller, resourceLimiter: cloudprovider.NewResourceLimiter(map[string]int64{}, map[string]int64{})}
 	fixture.templates = map[string]*framework.NodeInfo{}
@@ -145,71 +138,6 @@ func (fixture *failoverOrchestratorFixture) observeAttempt(name string) *unstruc
 	}))
 	return attempt
 }
-func (fixture *failoverOrchestratorFixture) newScan() (*clusterstate.ClusterStateRegistry, *orchestrator.ScaleUpOrchestrator, func() []*corev1.Pod) {
-	t := fixture.t
-	context, err := coretest.NewScaleTestAutoscalingContext(fixture.options, fakekube.NewSimpleClientset(), nil, fixture.provider, nil, nil)
-	require.NoError(t, err)
-	daemonsets, err := kubeutils.NewTestDaemonSetLister(nil)
-	require.NoError(t, err)
-	allNodes := kubeutils.NewTestNodeLister(fixture.nodes)
-	context.ListerRegistry = kubeutils.NewListerRegistry(allNodes, allNodes, kubeutils.NewTestPodLister(append([]*corev1.Pod{fixture.occupied}, fixture.pending...)), kubeutils.NewTestPodDisruptionBudgetLister(nil), daemonsets, nil, nil, nil, nil)
-	processors := processorstest.NewTestProcessors(&context)
-	context.ScaleDownActuator = actuation.NewActuator(&context, processors.ScaleStateNotifier, deletiontracker.NewNodeDeletionTracker(0), simulatoroptions.NodeDeleteOptions{}, nil, processors.NodeGroupConfigProcessor)
-	fixture.registry = clusterstate.NewClusterStateRegistry(fixture.provider, clusterstate.ClusterStateRegistryConfig{OkTotalUnreadyCount: 10, MaxTotalUnreadyPercentage: 100}, context.LogRecorder, coretest.NewBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(fixture.options.NodeGroupDefaults), processors.AsyncNodeGroupStateChecker)
-	processors.ScaleStateNotifier.Register(fixture.registry)
-	builder, err := estimator.NewEstimatorBuilder(estimator.BinpackingEstimatorName, estimator.NewThresholdBasedEstimationLimiter(nil), estimator.NewDecreasingPodOrderer(), nil)
-	require.NoError(t, err)
-	orchestrator := orchestrator.New()
-	orchestrator.Initialize(&context, processors, fixture.registry, builder, taints.TaintConfig{})
-	fixture.filterPods = func() []*corev1.Pod {
-		allNodes.SetNodes(fixture.nodes)
-		require.NoError(t, context.ClusterSnapshot.SetClusterState(fixture.nodes, fixture.boundPods, nil))
-		counts, exclusions := fixture.registry.GetUpcomingNodes()
-		placeholderIndex := 0
-		for group, count := range counts {
-			for index := 0; index < count; index++ {
-				nodeInfo, err := simulator.SanitizedNodeInfo(fixture.templates[group], fmt.Sprintf("upcoming-%d", placeholderIndex))
-				require.NoError(t, err)
-				require.NoError(t, context.ClusterSnapshot.AddNodeInfo(nodeInfo))
-				placeholderIndex++
-			}
-		}
-		for _, names := range exclusions {
-			for _, name := range names {
-				require.NoError(t, context.ClusterSnapshot.RemoveNodeInfo(name))
-			}
-		}
-		residual, err := processors.PodListProcessor.Process(&context, fixture.pending)
-		require.NoError(t, err)
-		t.Logf("placeholders=%d residualPods=%d", placeholderIndex, len(residual))
-		return residual
-	}
-	return fixture.registry, orchestrator, fixture.filterPods
-}
-func (fixture *failoverOrchestratorFixture) scan() int {
-	t := fixture.t
-	require.NoError(t, fixture.provider.Refresh())
-	if fixture.disableAccounting {
-		fixture.controller.failover.Lock()
-		id := "MachinePool/tenant/" + fixture.pair + "-primary"
-		policy := fixture.controller.failover.Policies[id]
-		policy.BlockUnregistered = false
-		fixture.controller.failover.Policies[id] = policy
-		fixture.controller.failover.Unlock()
-	}
-	require.NoError(t, fixture.registry.UpdateNodes(fixture.nodes, nil, fixture.clock.Now()))
-	counts, exclusions := fixture.registry.GetUpcomingNodes()
-	incoming, err := fixture.engine.UpcomingNodes(fixture.templates)
-	assert.NoError(t, err)
-	t.Logf("scan=%s counts=%v excluded=%v orchestratorIncoming=%d", fixture.clock.Now().Format(time.RFC3339), counts, exclusions, len(incoming))
-	residual := fixture.filterPods()
-	if len(residual) > 0 {
-		_, err = fixture.engine.ScaleUp(residual, fixture.nodes, nil, fixture.templates, false)
-		require.NoError(t, err)
-	}
-	fixture.clock.Step(10 * time.Second)
-	return len(residual)
-}
 func (fixture *failoverOrchestratorFixture) restart() {
 	t := fixture.t
 	retainedClient := fixture.controller.managementClient
@@ -262,4 +190,49 @@ func (fixture *failoverOrchestratorFixture) registerReady(role string, count int
 	_, err = resource.Update(context.Background(), pool, metav1.UpdateOptions{})
 	require.NoError(t, err)
 	require.NoError(t, fixture.controller.machinePoolInformer.Informer().GetStore().Update(pool))
+}
+
+func (fixture *failoverOrchestratorFixture) pendingPod(name string) *corev1.Pod {
+	pod := testutils.BuildTestPod(name, 1400, 100)
+	pod.Spec.NodeSelector = map[string]string{"test/workload": fixture.pair + "-primary", corev1.LabelOSStable: fixture.templates["MachinePool/tenant/"+fixture.pair+"-primary"].Node().Labels[corev1.LabelOSStable]}
+	if fixture.pair == "lin" {
+		pod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"] = apiresource.MustParse("1")
+	}
+	return pod
+}
+
+func (fixture *failoverOrchestratorFixture) setMaximum(role, maximum string) {
+	fixture.t.Helper()
+	pools := fixture.controller.managementClient.Resource(fixture.controller.machinePoolResource).Namespace("tenant")
+	pool, err := pools.Get(context.Background(), fixture.pair+"-"+role, metav1.GetOptions{})
+	require.NoError(fixture.t, err)
+	annotations := pool.GetAnnotations()
+	annotations[nodeGroupMaxSizeAnnotationKey] = maximum
+	pool.SetAnnotations(annotations)
+	_, err = pools.Update(context.Background(), pool, metav1.UpdateOptions{})
+	require.NoError(fixture.t, err)
+	require.NoError(fixture.t, fixture.controller.machinePoolInformer.Informer().GetStore().Update(pool))
+}
+
+func (fixture *failoverOrchestratorFixture) lastWrite() *autoscalingv1.Scale {
+	fixture.t.Helper()
+	var last *autoscalingv1.Scale
+	for _, action := range fixture.controller.managementScaleClient.(*fakescale.FakeScaleClient).Actions() {
+		if action.GetVerb() == "update" {
+			last = action.(clienttesting.UpdateAction).GetObject().(*autoscalingv1.Scale)
+		}
+	}
+	require.NotNil(fixture.t, last, "expected a scale write")
+	return last
+}
+
+func (fixture *failoverOrchestratorFixture) pairState() *failover.Pair {
+	fixture.t.Helper()
+	ctx := context.Background()
+	cluster, err := fixture.controller.managementClient.Resource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "clusters"}).Namespace("tenant").Get(ctx, "test", metav1.GetOptions{})
+	require.NoError(fixture.t, err)
+	state, _, err := fixture.controller.failover.Store.Load(ctx, cluster)
+	require.NoError(fixture.t, err)
+	require.Contains(fixture.t, state.Pairs, fixture.pair)
+	return state.Pairs[fixture.pair]
 }

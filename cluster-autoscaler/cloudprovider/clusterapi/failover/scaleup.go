@@ -92,5 +92,15 @@ func (writer *Policy) IncreaseSize(group Group, delta int, scales scale.ScalesGe
 	}
 	current.Spec.Replicas += int32(delta)
 	_, err = scales.Scales(object.GetNamespace()).Update(ctx, gvr.GroupResource(), current, metav1.UpdateOptions{})
+	if err == nil {
+		writer.Lock()
+		snapshot := writer.Policies[group.Id()]
+		if snapshot.ExpectedTarget != nil && *snapshot.ExpectedTarget == *policy.ExpectedTarget {
+			target := int(current.Spec.Replicas)
+			snapshot.ExpectedTarget = &target
+			writer.Policies[group.Id()] = snapshot
+		}
+		writer.Unlock()
+	}
 	return true, err
 }

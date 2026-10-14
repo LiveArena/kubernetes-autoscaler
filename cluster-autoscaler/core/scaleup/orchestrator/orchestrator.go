@@ -490,10 +490,25 @@ func (o *ScaleUpOrchestrator) ComputeExpansionOption(
 	option.NodeCount, option.Pods = expansionEstimator.Estimate(podGroups, nodeInfo, nodeGroup)
 	metrics.UpdateDurationFromStart(metrics.Estimate, estimateStart)
 
+	if offset := cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).ScaleUpDemandOffset; offset > 0 {
+		if allOrNothing {
+			option.NodeCount = 0
+			option.Pods = nil
+			return option
+		}
+		option.NodeCount = max(0, option.NodeCount-offset)
+		if option.NodeCount == 0 {
+			option.Pods = nil
+			return option
+		}
+	}
 	if limit := cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).ScaleUpLimit; limit > 0 && option.NodeCount > limit {
-		option.NodeCount = 0
-		option.Pods = nil
-		return option
+		if allOrNothing || cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).RequireFullScaleUp {
+			option.NodeCount = 0
+			option.Pods = nil
+			return option
+		}
+		option.NodeCount = limit
 	}
 
 	if cloudprovider.GetNodeGroupCapacityPolicy(nodeGroup).RequireFullScaleUp && option.NodeCount > 0 {

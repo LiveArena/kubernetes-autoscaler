@@ -39,33 +39,9 @@ type Member struct {
 // Member resolves live ownership and records usable workload nodes for a discovered group.
 func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) {
 	pool := group.Object()
-	if pool.GetKind() != MachinePoolKind || pool.GetUID() == "" || !pool.GetDeletionTimestamp().IsZero() {
-		return nil, fmt.Errorf("failover requires an active MachinePool with UID")
-	}
-	var cluster *unstructured.Unstructured
-	for _, owner := range pool.GetOwnerReferences() {
-		if owner.Kind != "Cluster" || owner.UID == "" {
-			continue
-		}
-		version, err := schema.ParseGroupVersion(owner.APIVersion)
-		if err != nil || version.Group != policy.Environment.MachinePoolResource().Group {
-			return nil, fmt.Errorf("invalid owning Cluster reference")
-		}
-		cluster, err = policy.Store.Client.Resource(version.WithResource("clusters")).Namespace(pool.GetNamespace()).Get(ctx, owner.Name, metav1.GetOptions{})
-		if err != nil {
-			return nil, err
-		}
-		if cluster.GetUID() != owner.UID || !cluster.GetDeletionTimestamp().IsZero() {
-			return nil, fmt.Errorf("stale or deleting owning Cluster")
-		}
-		break
-	}
-	if cluster == nil {
-		return nil, fmt.Errorf("missing owning Cluster reference")
-	}
-	clusterName, found, err := unstructured.NestedString(pool.Object, "spec", "clusterName")
-	if err != nil || !found || clusterName != cluster.GetName() {
-		return nil, fmt.Errorf("MachinePool clusterName does not match its owning Cluster")
+	cluster, err := policy.owningCluster(ctx, group)
+	if err != nil {
+		return nil, err
 	}
 	ref, found, err := unstructured.NestedStringMap(pool.Object, "spec", "template", "spec", "infrastructureRef")
 	if err != nil || !found || ref["kind"] != "AzureMachinePool" || ref["name"] == "" || (ref["namespace"] != "" && ref["namespace"] != pool.GetNamespace()) {
@@ -126,4 +102,37 @@ func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) 
 		}
 	}
 	return member, nil
+}
+
+func (policy *Policy) owningCluster(ctx context.Context, group Group) (*unstructured.Unstructured, error) {
+	pool := group.Object()
+	if pool.GetKind() != MachinePoolKind || pool.GetUID() == "" || !pool.GetDeletionTimestamp().IsZero() {
+		return nil, fmt.Errorf("failover requires an active MachinePool with UID")
+	}
+	var cluster *unstructured.Unstructured
+	for _, owner := range pool.GetOwnerReferences() {
+		if owner.Kind != "Cluster" || owner.UID == "" {
+			continue
+		}
+		version, err := schema.ParseGroupVersion(owner.APIVersion)
+		if err != nil || version.Group != policy.Environment.MachinePoolResource().Group {
+			return nil, fmt.Errorf("invalid owning Cluster reference")
+		}
+		cluster, err = readScanCluster(ctx, policy.Store.Client, version.WithResource("clusters"), pool.GetNamespace(), owner.Name)
+		if err != nil {
+			return nil, err
+		}
+		if cluster.GetUID() != owner.UID || !cluster.GetDeletionTimestamp().IsZero() {
+			return nil, fmt.Errorf("stale or deleting owning Cluster")
+		}
+		break
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("missing owning Cluster reference")
+	}
+	clusterName, found, err := unstructured.NestedString(pool.Object, "spec", "clusterName")
+	if err != nil || !found || clusterName != cluster.GetName() {
+		return nil, fmt.Errorf("MachinePool clusterName does not match its owning Cluster")
+	}
+	return cluster, nil
 }

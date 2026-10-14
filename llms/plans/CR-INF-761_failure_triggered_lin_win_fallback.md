@@ -89,6 +89,16 @@ route new demand to secondary.
 **Rationale:** fallback supplies unmet demand without becoming sticky or producing
 replica debt across scans, attempts or restart.
 
+When residual demand exceeds an existing failure allowance, primary estimation
+excludes that old failed-demand window and tries only the excess. The old allowance
+remains available for its full secondary request while the fresh trial is pending.
+Primary success preserves still-unmet old demand; fresh failure/expiry adds only
+the new unmet increment, bounded by the actual primary gap. Secondary commitment
+consumes only its own increment. At a freshly verified primary maximum, full
+residual fallback is not capped by an older allowance. Non-full request retries
+may progress within their window; secondary full-request and all-or-nothing
+protections are unchanged.
+
 Request intent is persisted before the scale write. The fresh primary increment
 gets bounded incoming credit separately from the old failed gap, without counting
 registered arrivals twice. Its deadline uses the existing per-group
@@ -346,6 +356,12 @@ An old incapable image with active secondaries is not an approved rollback.
 Configuration/state use the management client; workload nodes/pods use the
 workload-side discovery/snapshot. Configuration is read by exact-name GET on scans
 and before admitted writes. Reuse the prepared management permissions:
+
+Read-only Cluster/configuration lookups are memoized within one scan, including
+unpaired owning-Cluster scope discovery without AMP/scale capacity reads. Planning
+`TargetSize` uses the published scan target, updated after verified local writes.
+The cache does not cross scans or enter store/write authorization: live target,
+identity, current intent and CAS-retry checks remain fresh.
 
 - Configuration ConfigMap: exact-name read-only access.
 - State ConfigMap: exact-name read/update/patch and tenant-scoped create, because

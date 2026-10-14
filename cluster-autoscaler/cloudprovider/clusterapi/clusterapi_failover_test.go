@@ -25,9 +25,51 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
+	fakescale "k8s.io/client-go/scale/fake"
 	"testing"
 	"time"
 )
+
+func TestPairedTargetSizeUsesScanSnapshotButScaleWritesRevalidateLiveTargets(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	provider := &provider{controller: controller}
+	require.NoError(t, provider.Refresh())
+	var primary *nodegroup
+	for _, candidate := range provider.NodeGroups() {
+		if candidate.(*nodegroup).Object().GetName() == "lin-primary" {
+			primary = candidate.(*nodegroup)
+		}
+	}
+	require.NotNil(t, primary)
+	scales := controller.managementScaleClient.(*fakescale.FakeScaleClient)
+	scales.ClearActions()
+	for index := 0; index < 5; index++ {
+		target, err := primary.TargetSize()
+		require.NoError(t, err)
+		assert.Equal(t, 3, target)
+	}
+	assert.Empty(t, scales.Actions(), "planning reads must not repeatedly query the management scale subresource")
+	pools := controller.managementClient.Resource(controller.machinePoolResource).Namespace("tenant")
+	pool, err := pools.Get(context.Background(), "lin-primary", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(pool.Object, int64(2), "spec", "replicas"))
+	_, err = pools.Update(context.Background(), pool, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	target, err := primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 3, target, "external target changes must not mutate the planning snapshot")
+	require.Error(t, primary.IncreaseSize(1), "writes still reject a live target changed since the scan")
+	require.NoError(t, provider.Refresh())
+	target, err = primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 2, target)
+	require.NoError(t, primary.IncreaseSize(1))
+	scales.ClearActions()
+	target, err = primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 3, target, "a verified local write updates the published target without another GET")
+	assert.Empty(t, scales.Actions())
+}
 
 func TestActualProviderRevalidatesPairLifecycleBeforeCachedScaleWrites(t *testing.T) {
 	controller, _ := newFailoverTestController(t)

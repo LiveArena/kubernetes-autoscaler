@@ -66,27 +66,31 @@ func (policy *Policy) PrepareScaleRequest(group Group, delta int) error {
 			}
 			return fmt.Errorf("another durable failover request is outstanding")
 		}
-		if role == "primary" && (pair.FallbackAllowance > 0 || pair.SecondaryRequest != nil) {
+		if role == "primary" && pair.SecondaryRequest != nil {
 			return fmt.Errorf("primary request window is not available")
 		}
+		secondaryReason := ""
 		if role == "secondary" {
-			fitReason := policy.PrimaryFitFallbackReason(group.Id())
-			if policy.Frozen || pair.PrimaryRequest != nil && (member.Target < 0 || fitReason == "") || pair.Secondary.Failed || pair.FallbackAllowance > 0 && delta > pair.FallbackAllowance {
+			secondaryReason = policy.PrimaryFitFallbackReason(group.Id())
+			if policy.Frozen || pair.PrimaryRequest != nil && pair.FallbackAllowance == 0 && (member.Target < 0 || secondaryReason == "") || pair.Secondary.Failed {
 				return fmt.Errorf("secondary request window is not available")
 			}
-			if pair.FallbackAllowance == 0 {
+			if pair.FallbackAllowance == 0 || delta > pair.FallbackAllowance {
 				capped, err := policy.PrimaryAtMaximum(ctx, member.Cluster, name, pair.Primary.PoolUID)
 				if err != nil {
 					return err
 				}
-				if !capped && fitReason == "" {
+				if !capped && secondaryReason == "" {
 					return fmt.Errorf("new request must try primary first")
+				}
+				if capped && secondaryReason == "" {
+					secondaryReason = "primary is at its current maximum"
 				}
 			}
 		}
 		*request = &Request{FromTarget: member.Target, ToTarget: member.Target + delta, Started: metav1.NewTime(policy.Clock.Now().Truncate(time.Second)), FailureUIDAtStart: record.LastAttemptUID, ReadyAtStart: len(member.Ready), ReadyFingerprint: ReadyFingerprint(member.Ready)}
 		if role == "secondary" {
-			(*request).PrimaryUnavailableReason = policy.PrimaryFitFallbackReason(group.Id())
+			(*request).PrimaryUnavailableReason = secondaryReason
 		}
 		if role == "primary" {
 			duration, err := policy.PrimaryTrialDuration(group)
@@ -95,7 +99,6 @@ func (policy *Policy) PrepareScaleRequest(group Group, delta int) error {
 			}
 			deadline := metav1.NewTime((*request).Started.Add(duration))
 			(*request).Deadline = &deadline
-			pair.FallbackAllowance = 0
 		}
 		return nil
 	})
