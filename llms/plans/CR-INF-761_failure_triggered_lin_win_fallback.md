@@ -376,12 +376,26 @@ identity, current intent and CAS-retry checks remain fresh.
   tenant Role; no Cluster list/watch, mutation or cluster-wide grant is required.
 - Existing MachinePool/scale, AMP and AMPM discovery/write access.
 
-Cluster `get` is a failover-specific addition to the baseline pool-management
-permissions. It verifies that the actual parent exists, matches the pools' owner
-UID and is not deleting, establishing the root identity for config/state bindings.
-Agreement between retained pool/config owner references alone cannot establish
-that the parent is still current. Removing this read would weaken stale-parent
-and deleting-parent refusal, not just reduce redundant API traffic.
+**Explicit choice:** request additional namespaced CAPI Cluster `get` permission
+for active/freeze failover and lifecycle reconciliation, restricted with
+`resourceNames` to the configured Cluster. This is a chosen stronger safety
+contract, not an inherent requirement of primary/secondary pools or baseline
+replica management. It applies to both paired roles. No Cluster list/watch,
+mutation or cluster-wide grant is selected.
+
+**Rationale:** independently verify that the actual parent exists, matches the
+pools' owner UID and is not deleting before trusting durable config/state bindings.
+Retained pools, configuration and state can agree with each other while referring
+to an obsolete parent; their mutual consistency does not establish parent liveness.
+This check detects that condition at validation time, not an atomic fence across
+Cluster and pool updates.
+
+**Alternative not selected:** derive Cluster identity only from pool/config owner
+references, retaining physical Pool/AMP UID, lifecycle and CAS protections without
+reading the parent. That would avoid the new permission but forgo independent
+missing/recreated/deleting-parent refusal. The current implementation deliberately
+retains that extra guarantee; the permission must be supplied explicitly by the
+deployment owner, not silently widened by the autoscaler.
 
 Prepared name-scoped list/watch permissions may remain, but the config/state
 reader does not require namespace-wide list/watch. Any name-scoped list/watch

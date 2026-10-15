@@ -25,6 +25,7 @@ cluster.
 * [Specifying a Custom Resource Version](#specifying-a-custom-resource-version)
 * [Sample manifest](#sample-manifest)
   * [A note on permissions](#a-note-on-permissions)
+    * [Azure MachinePool failover permissions](#azure-machinepool-failover-permissions)
 * [Autoscaling with ClusterClass and Managed Topologies](#autoscaling-with-clusterclass-and-managed-topologies)
 * [Special note on GPU instances](#special-note-on-gpu-instances)
 * [Special note on balancing similar node groups](#special-note-on-balancing-similar-node-groups)
@@ -389,6 +390,36 @@ envsubst < examples/deployment.yaml | kubectl apply -f-
 The `cluster-autoscaler-management` role for accessing cluster api scalable resources is scoped to `ClusterRole`.
 This may not be ideal for all environments (eg. Multi tenant environments).
 In such cases, it is recommended to scope it to a `Role` mapped to a specific namespace.
+
+#### Azure MachinePool failover permissions
+
+The fork's opt-in `--azure-machinepool-failover-mode=active|freeze` adds management
+access requirements beyond ordinary pool resizing. The disabled baseline does not
+require the additional parent-Cluster read.
+
+**Explicit safety choice:** failover verifies that the owning CAPI Cluster exists,
+has the expected UID and is not deleting before trusting retained pair/config/state
+identity. This is not an inherent requirement of primary/secondary pools. Deriving
+identity only from owner references would avoid the new permission but would not
+independently detect a missing, recreated or deleting parent.
+
+Grant only `get` on the configured Cluster in a management-namespace `Role`. For
+example, add this rule for a Cluster named `managed-cluster`:
+
+```yaml
+- apiGroups: ["cluster.x-k8s.io"]
+  resources: ["clusters"]
+  resourceNames: ["managed-cluster"]
+  verbs: ["get"]
+```
+
+This does not require Cluster list/watch, mutation or a cluster-wide grant. The
+baseline sample manifest and Helm Role/ClusterRole templates do not automatically
+include the failover additions. Deployment owners must also supply the scoped
+failover configuration/state ConfigMap access described in
+[CR-INF-761](../../../llms/plans/CR-INF-761_failure_triggered_lin_win_fallback.md#management-access-and-capability-verification).
+Helm exposes `rbac.additionalRules` for extra Role/ClusterRole rules; select the
+appropriate management namespace and Role scope rather than widening all tenants.
 
 
 ## Autoscaling with ClusterClass and Managed Topologies
