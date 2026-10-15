@@ -166,6 +166,14 @@ func (ng *nodegroup) DeleteNodes(nodes []*corev1.Node) error {
 			return err
 		}
 
+		// Handle Azure-specific deletion logic
+		if ng.machineController.azureIntegration != nil {
+			err := ng.machineController.azureIntegration.deletionHandler.HandleAzureMachinePoolDeletion(machine, ng)
+			if err != nil {
+				return err
+			}
+		}
+
 		if err := ng.scalableResource.SetSize(replicas - 1); err != nil {
 			_ = nodeGroup.scalableResource.UnmarkMachineForDeletion(machine)
 			return err

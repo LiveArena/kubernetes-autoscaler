@@ -22,7 +22,7 @@ ARG LDFLAGS_FLAG
 ARG TAGS_FLAG
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o cluster-autoscaler-$GOARCH $LDFLAGS_FLAG $TAGS_FLAG
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot
 ARG GOARCH
 COPY --from=builder /workspace/cluster-autoscaler-$GOARCH /cluster-autoscaler
 
