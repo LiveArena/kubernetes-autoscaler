@@ -19,8 +19,8 @@ package failover
 import (
 	"context"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -59,7 +59,8 @@ func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error 
 	if reference.Name != group.Object().GetName() || resolved[reference.Name] != group.Object().GetUID() {
 		return fmt.Errorf("pool generation changed in failover configuration")
 	}
-	pool, err := policy.Store.Client.Resource(policy.Environment.MachinePoolResource()).Namespace(member.Cluster.GetNamespace()).Get(ctx, reference.Name, metav1.GetOptions{})
+	resource := policy.Environment.MachinePoolResource()
+	pool, err := policy.Store.readResource(ctx, schema.GroupKind{Group: resource.Group, Kind: MachinePoolKind}, resource.GroupVersion().String(), member.Cluster.GetNamespace(), reference.Name)
 	if err != nil {
 		return err
 	}
@@ -68,7 +69,7 @@ func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error 
 		return fmt.Errorf("live pool infrastructure reference changed since admission")
 	}
 	version, err := policy.infrastructureVersion(infrastructure)
-	if err != nil || version.String() != member.Infrastructure.GetAPIVersion() {
+	if err != nil || !sameResourceAPIGroup(version.String(), member.Infrastructure.GetAPIVersion()) {
 		return fmt.Errorf("live pool infrastructure API identity changed since admission: %v", err)
 	}
 	return nil
@@ -77,10 +78,10 @@ func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error 
 // ResolveConfiguredPools validates all selected roles and returns their live MachinePool UIDs.
 func (policy *Policy) ResolveConfiguredPools(ctx context.Context, cluster *unstructured.Unstructured, configuration *Configuration) (map[string]types.UID, error) {
 	resolved := map[string]types.UID{}
-	resource := policy.Store.Client.Resource(policy.Environment.MachinePoolResource()).Namespace(cluster.GetNamespace())
+	resource := policy.Environment.MachinePoolResource()
 	for name, pair := range configuration.Pairs {
 		for role, reference := range map[string]ConfiguredPool{"primary": pair.Primary, "secondary": pair.Secondary} {
-			pool, err := resource.Get(ctx, reference.Name, metav1.GetOptions{})
+			pool, err := policy.Store.readResource(ctx, schema.GroupKind{Group: resource.Group, Kind: MachinePoolKind}, resource.GroupVersion().String(), cluster.GetNamespace(), reference.Name)
 			if err != nil {
 				return nil, fmt.Errorf("pair %q role %s reference %q cannot be resolved: %w", name, role, reference.Name, err)
 			}
@@ -91,7 +92,7 @@ func (policy *Policy) ResolveConfiguredPools(ctx context.Context, cluster *unstr
 			}
 			owned := false
 			for _, owner := range pool.GetOwnerReferences() {
-				if owner.Kind == "Cluster" && owner.APIVersion == cluster.GetAPIVersion() && owner.Name == cluster.GetName() && owner.UID == cluster.GetUID() {
+				if matchesClusterOwner(owner, cluster) {
 					owned = true
 				}
 			}

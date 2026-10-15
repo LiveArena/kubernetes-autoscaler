@@ -45,10 +45,12 @@ func (controller *machineController) MachinePoolResource() schema.GroupVersionRe
 }
 
 func (controller *machineController) PreferredInfrastructureVersion(group string) (string, error) {
-	if controller.managementDiscoveryClient == nil {
-		return "", fmt.Errorf("management API discovery is unavailable")
+	resolver := controller.failover.Store.Resolver
+	if resolver == nil {
+		return "", fmt.Errorf("management resource discovery is unavailable")
 	}
-	return getAPIGroupPreferredVersion(controller.managementDiscoveryClient, group)
+	resource, err := resolver.ResolveResource(schema.GroupKind{Group: group, Kind: "AzureMachinePool"}, "", false)
+	return resource.Version, err
 }
 
 func (controller *machineController) FindNodeByProviderID(id string) (*corev1.Node, error) {

@@ -405,6 +405,13 @@ We accept that mutually consistent retained metadata cannot independently tell
 whether the parent has disappeared, been recreated or started deleting. Parent
 teardown coordination remains with the existing deployment/resource lifecycle.
 
+Failover compares resource identity by API group, kind, namespace, name and UID,
+not exact Kubernetes API version. It resolves served resource endpoints through
+cached management discovery and accepts supported legacy/versionless reference
+forms. Required fields, foreign groups and different UIDs remain strict; changing
+an API representation does not reset a pair's history. The failover configuration
+and persisted-state schema versions are separate contracts and remain validated.
+
 The baseline sample manifest and Helm Role/ClusterRole templates do not automatically
 include the failover ConfigMap additions. Deployment owners supply the scoped
 configuration/state ConfigMap access described in

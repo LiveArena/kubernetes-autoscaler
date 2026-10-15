@@ -76,7 +76,10 @@ type Role struct {
 }
 
 // Store reads and reconciles Cluster-owned state through the management API.
-type Store struct{ Client dynamic.Interface }
+type Store struct {
+	Client   dynamic.Interface
+	Resolver ResourceResolver
+}
 
 // NewState initializes empty failover state bound to the Cluster UID.
 func NewState(cluster *unstructured.Unstructured) *State {

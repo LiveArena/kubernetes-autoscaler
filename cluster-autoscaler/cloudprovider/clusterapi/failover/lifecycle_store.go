@@ -125,5 +125,5 @@ func containsLifecycleRecords(state *State) bool {
 }
 
 func sameMemberBinding(previous, current Role) bool {
-	return previous.PoolUID == current.PoolUID && previous.InfrastructureUID == current.InfrastructureUID && previous.PoolName == current.PoolName && previous.PoolVersion == current.PoolVersion && previous.InfrastructureName == current.InfrastructureName && previous.InfrastructureVersion == current.InfrastructureVersion
+	return previous.PoolUID == current.PoolUID && previous.InfrastructureUID == current.InfrastructureUID && previous.PoolName == current.PoolName && sameResourceAPIGroup(previous.PoolVersion, current.PoolVersion) && previous.InfrastructureName == current.InfrastructureName && sameResourceAPIGroup(previous.InfrastructureVersion, current.InfrastructureVersion)
 }

@@ -19,8 +19,8 @@ package failover
 import (
 	"context"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"strconv"
 )
@@ -41,7 +41,7 @@ func (policy *Policy) PrimaryAtMaximum(ctx context.Context, cluster *unstructure
 		if err != nil {
 			return false, err
 		}
-		object, err = policy.Store.Client.Resource(gvr).Namespace(object.GetNamespace()).Get(ctx, object.GetName(), metav1.GetOptions{})
+		object, err = policy.Store.readResource(ctx, schema.GroupKind{Group: gvr.Group, Kind: MachinePoolKind}, gvr.GroupVersion().String(), object.GetNamespace(), object.GetName())
 		if err != nil {
 			return false, err
 		}

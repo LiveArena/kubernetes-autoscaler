@@ -51,7 +51,7 @@ func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) 
 	if err != nil {
 		return nil, err
 	}
-	infrastructure, err := policy.Store.Client.Resource(version.WithResource("azuremachinepools")).Namespace(pool.GetNamespace()).Get(ctx, ref["name"], metav1.GetOptions{})
+	infrastructure, err := policy.Store.readResource(ctx, schema.GroupKind{Group: version.Group, Kind: "AzureMachinePool"}, version.String(), pool.GetNamespace(), ref["name"])
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/scale"
 )
 
@@ -56,7 +57,7 @@ func (writer *Policy) IncreaseSize(group Group, delta int, scales scale.ScalesGe
 	if int(current.Spec.Replicas) != *policy.ExpectedTarget {
 		return true, fmt.Errorf("failover target changed since admission; retry after reconciliation")
 	}
-	pool, err := writer.Store.Client.Resource(gvr).Namespace(object.GetNamespace()).Get(ctx, object.GetName(), metav1.GetOptions{})
+	pool, err := writer.Store.readResource(ctx, schema.GroupKind{Group: gvr.Group, Kind: MachinePoolKind}, gvr.GroupVersion().String(), object.GetNamespace(), object.GetName())
 	if err != nil {
 		return true, err
 	}

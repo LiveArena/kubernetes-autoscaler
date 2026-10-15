@@ -19,7 +19,6 @@ package failover
 import (
 	"context"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -34,7 +33,7 @@ func (store *Store) validateLifecycleBinding(ctx context.Context, cluster *unstr
 		if err != nil || version.Group == "" || record.PoolName != reference.Name {
 			return fmt.Errorf("invalid registered pool reference for pair %q", name)
 		}
-		pool, err := store.Client.Resource(version.WithResource("machinepools")).Namespace(cluster.GetNamespace()).Get(ctx, reference.Name, metav1.GetOptions{})
+		pool, err := store.readResource(ctx, schema.GroupKind{Group: version.Group, Kind: MachinePoolKind}, record.PoolVersion, cluster.GetNamespace(), reference.Name)
 		if err != nil {
 			return err
 		}
@@ -43,7 +42,7 @@ func (store *Store) validateLifecycleBinding(ctx context.Context, cluster *unstr
 			return fmt.Errorf("current physical member does not match pair %q registration", name)
 		}
 		clusterName, found, err := unstructured.NestedString(pool.Object, "spec", "clusterName")
-		if err != nil || !found || clusterName != cluster.GetName() || pool.GetAPIVersion() != record.PoolVersion {
+		if err != nil || !found || clusterName != cluster.GetName() || !sameResourceAPIGroup(pool.GetAPIVersion(), record.PoolVersion) {
 			return fmt.Errorf("registered pool Cluster or API identity changed")
 		}
 		reference, found, err := unstructured.NestedStringMap(pool.Object, "spec", "template", "spec", "infrastructureRef")
@@ -55,12 +54,12 @@ func (store *Store) validateLifecycleBinding(ctx context.Context, cluster *unstr
 			return fmt.Errorf("invalid registered infrastructure API version")
 		}
 		referenced, err := infrastructureReferenceVersion(reference, func(group string) (string, error) { return registered.Version, nil })
-		if err != nil || referenced != registered {
+		if err != nil || referenced.Group != registered.Group {
 			return fmt.Errorf("registered pool infrastructure API identity changed")
 		}
 		owned := false
 		for _, owner := range pool.GetOwnerReferences() {
-			owned = owned || owner.Kind == "Cluster" && owner.Name == cluster.GetName() && owner.UID == cluster.GetUID() && owner.APIVersion == cluster.GetAPIVersion()
+			owned = owned || matchesClusterOwner(owner, cluster)
 		}
 		if !owned {
 			return fmt.Errorf("registered member has a different Cluster owner")
@@ -69,7 +68,7 @@ func (store *Store) validateLifecycleBinding(ctx context.Context, cluster *unstr
 		if err != nil || version.Group != AzureAPIGroup || record.InfrastructureName == "" {
 			return fmt.Errorf("invalid registered infrastructure identity")
 		}
-		infrastructure, err := store.Client.Resource(version.WithResource("azuremachinepools")).Namespace(cluster.GetNamespace()).Get(ctx, record.InfrastructureName, metav1.GetOptions{})
+		infrastructure, err := store.readResource(ctx, schema.GroupKind{Group: version.Group, Kind: "AzureMachinePool"}, record.InfrastructureVersion, cluster.GetNamespace(), record.InfrastructureName)
 		if err != nil {
 			return err
 		}

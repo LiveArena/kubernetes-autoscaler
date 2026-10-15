@@ -22,6 +22,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
 	"time"
@@ -32,6 +33,7 @@ func (controller *machineController) enableAzureFailover(frozen bool, scanInterv
 		return fmt.Errorf("Azure failover requires the AMPM informer")
 	}
 	policy := &failover.Policy{Environment: controller, Store: &failover.Store{Client: controller.managementClient}, Clock: clock.RealClock{}, ScanInterval: scanInterval, Frozen: frozen, Policies: map[string]cloudprovider.NodeGroupCapacityPolicy{}, Observations: map[string]failover.FailureObservation{}}
+	policy.Store.Resolver = &failoverResourceResolver{discovery: func() discovery.DiscoveryInterface { return controller.managementDiscoveryClient }}
 	if controller.failover != nil {
 		policy.NodeGroupDefaults = controller.failover.NodeGroupDefaults
 	}

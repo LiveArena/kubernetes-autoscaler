@@ -38,8 +38,8 @@ func ReadConfiguration(ctx context.Context, client dynamic.Interface, cluster *u
 	owners := 0
 	for _, owner := range object.GetOwnerReferences() {
 		if owner.Kind == "Cluster" {
-			if owner.Name != cluster.GetName() || owner.UID != cluster.GetUID() || owner.APIVersion != cluster.GetAPIVersion() {
-				return nil, fmt.Errorf("failover configuration has a different Cluster owner")
+			if !matchesClusterOwner(owner, cluster) {
+				return nil, fmt.Errorf("failover configuration has a different Cluster owner: actual name=%q uid=%q apiVersion=%q; expected name=%q uid=%q apiVersion=%q (same-group API versions are equivalent)", owner.Name, owner.UID, owner.APIVersion, cluster.GetName(), cluster.GetUID(), cluster.GetAPIVersion())
 			}
 			owners++
 		}

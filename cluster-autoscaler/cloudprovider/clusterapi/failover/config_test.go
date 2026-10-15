@@ -118,6 +118,7 @@ func TestConfigurationReaderAcceptsOnlyCompleteUnambiguousOwnedPairs(t *testing.
 		})
 	}
 }
+
 func TestPairLifecycleConfigurationRequiresAnExplicitVersionAndIntent(t *testing.T) {
 	for _, scenario := range []struct {
 		statement, version, state                      string

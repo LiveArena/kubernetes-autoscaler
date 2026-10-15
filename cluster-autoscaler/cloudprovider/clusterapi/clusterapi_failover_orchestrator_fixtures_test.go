@@ -142,6 +142,7 @@ func (fixture *failoverOrchestratorFixture) restart() {
 	t := fixture.t
 	retainedClient := fixture.controller.managementClient
 	restarted := &machineController{managementClient: retainedClient, managementScaleClient: fixture.controller.managementScaleClient, machinePoolResource: fixture.controller.machinePoolResource, machinePoolsAvailable: true, stopChannel: fixture.controller.stopChannel, managementInformerFactory: dynamicinformer.NewDynamicSharedInformerFactory(retainedClient, 0)}
+	restarted.managementDiscoveryClient = fixture.controller.managementDiscoveryClient
 	restarted.machinePoolInformer = restarted.managementInformerFactory.ForResource(fixture.controller.machinePoolResource)
 	require.NoError(t, restarted.machinePoolInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{machinePoolProviderIDIndex: indexMachinePoolByProviderID}))
 	restarted.machineSetInformer = restarted.managementInformerFactory.ForResource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "machinesets"})

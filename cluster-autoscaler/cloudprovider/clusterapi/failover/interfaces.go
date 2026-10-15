@@ -46,3 +46,8 @@ type Environment interface {
 type InfrastructureVersionResolver interface {
 	PreferredInfrastructureVersion(string) (string, error)
 }
+
+// ResourceResolver selects a served namespaced resource endpoint for an identity.
+type ResourceResolver interface {
+	ResolveResource(schema.GroupKind, string, bool) (schema.GroupVersionResource, error)
+}

@@ -39,7 +39,7 @@ func (store *Store) Load(ctx context.Context, cluster *unstructured.Unstructured
 	}
 	owned := false
 	for _, owner := range object.GetOwnerReferences() {
-		if owner.UID == cluster.GetUID() && owner.Name == cluster.GetName() && owner.Kind == "Cluster" && owner.APIVersion == cluster.GetAPIVersion() {
+		if matchesClusterOwner(owner, cluster) {
 			owned = true
 		}
 	}

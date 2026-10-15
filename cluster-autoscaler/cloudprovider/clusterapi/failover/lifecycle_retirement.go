@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
@@ -99,7 +98,7 @@ func (store *Store) recordedPairResourcesGone(ctx context.Context, cluster *unst
 		if err != nil || version.Group == "" {
 			return false, fmt.Errorf("invalid registered pool version")
 		}
-		_, err = store.Client.Resource(version.WithResource("machinepools")).Namespace(cluster.GetNamespace()).Get(ctx, role.PoolName, metav1.GetOptions{})
+		_, err = store.readResource(ctx, schema.GroupKind{Group: version.Group, Kind: MachinePoolKind}, role.PoolVersion, cluster.GetNamespace(), role.PoolName)
 		if err == nil {
 			return false, nil
 		}
@@ -110,7 +109,7 @@ func (store *Store) recordedPairResourcesGone(ctx context.Context, cluster *unst
 		if err != nil || version.Group != AzureAPIGroup {
 			return false, fmt.Errorf("invalid registered infrastructure version")
 		}
-		_, err = store.Client.Resource(version.WithResource("azuremachinepools")).Namespace(cluster.GetNamespace()).Get(ctx, role.InfrastructureName, metav1.GetOptions{})
+		_, err = store.readResource(ctx, schema.GroupKind{Group: version.Group, Kind: "AzureMachinePool"}, role.InfrastructureVersion, cluster.GetNamespace(), role.InfrastructureName)
 		if err == nil {
 			return false, nil
 		}

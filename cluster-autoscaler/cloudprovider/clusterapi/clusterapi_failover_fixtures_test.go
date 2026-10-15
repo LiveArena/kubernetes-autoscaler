@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
@@ -65,6 +66,10 @@ func newFailoverTestController(t *testing.T) (*machineController, *clocktesting.
 	nodeInformer := informers.NewSharedInformerFactory(fakekube.NewSimpleClientset(), 0).Core().V1().Nodes().Informer()
 	require.NoError(t, nodeInformer.AddIndexers(cache.Indexers{nodeProviderIDIndex: indexNodeByProviderID}))
 	controller := &machineController{managementClient: client, managementInformerFactory: factory, nodeInformer: nodeInformer, stopChannel: stop, machinePoolResource: poolResource, machinePoolsAvailable: true, machinePoolInformer: factory.ForResource(poolResource), machineInformer: factory.ForResource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "machines"}), machineSetInformer: factory.ForResource(schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta2", Resource: "machinesets"})}
+	controller.managementDiscoveryClient = &fakediscovery.FakeDiscovery{Fake: &clienttesting.Fake{Resources: []*metav1.APIResourceList{
+		{GroupVersion: poolResource.GroupVersion().String(), APIResources: []metav1.APIResource{{Name: "machinepools", Kind: "MachinePool", Namespaced: true}}},
+		{GroupVersion: azureMachinePoolMachineApiGroup + "/v1beta1", APIResources: []metav1.APIResource{{Name: "azuremachinepools", Kind: "AzureMachinePool", Namespaced: true}}},
+	}}}
 	require.NoError(t, controller.machinePoolInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{machinePoolProviderIDIndex: indexMachinePoolByProviderID}))
 	require.NoError(t, controller.machineInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{machineProviderIDIndex: indexMachineByProviderID}))
 	scaleClient := &fakescale.FakeScaleClient{}

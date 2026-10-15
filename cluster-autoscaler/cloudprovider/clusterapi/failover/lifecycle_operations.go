@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"path"
@@ -62,7 +61,7 @@ func (policy *Policy) reconcileRetiringRequests(ctx context.Context, cluster *un
 		if err != nil {
 			return err
 		}
-		pool, err := policy.Store.Client.Resource(version.WithResource("machinepools")).Namespace(cluster.GetNamespace()).Get(ctx, operation.role.PoolName, metav1.GetOptions{})
+		pool, err := policy.Store.readResource(ctx, schema.GroupKind{Group: version.Group, Kind: MachinePoolKind}, operation.role.PoolVersion, cluster.GetNamespace(), operation.role.PoolName)
 		if apierrors.IsNotFound(err) {
 			continue
 		}

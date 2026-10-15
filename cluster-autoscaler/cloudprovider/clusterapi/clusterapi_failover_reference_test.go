@@ -32,7 +32,10 @@ import (
 
 func TestActualProviderRegistersVersionlessInfrastructureReferencesUsingDiscovery(t *testing.T) {
 	controller, _ := newFailoverTestController(t)
-	controller.managementDiscoveryClient = &fakediscovery.FakeDiscovery{Fake: &clienttesting.Fake{Resources: []*metav1.APIResourceList{{GroupVersion: failover.AzureAPIGroup + "/v1beta1", APIResources: []metav1.APIResource{{Name: "azuremachinepools", Kind: "AzureMachinePool", Namespaced: true}}}}}}
+	controller.managementDiscoveryClient = &fakediscovery.FakeDiscovery{Fake: &clienttesting.Fake{Resources: []*metav1.APIResourceList{
+		{GroupVersion: "cluster.x-k8s.io/v1beta2", APIResources: []metav1.APIResource{{Name: "machinepools", Kind: "MachinePool", Namespaced: true}}},
+		{GroupVersion: failover.AzureAPIGroup + "/v1beta1", APIResources: []metav1.APIResource{{Name: "azuremachinepools", Kind: "AzureMachinePool", Namespaced: true}}},
+	}}}
 	ctx := context.Background()
 	pools := controller.managementClient.Resource(controller.machinePoolResource).Namespace("tenant")
 	for _, candidate := range (&provider{controller: controller}).NodeGroups() {
@@ -92,4 +95,15 @@ func TestActualProviderRegistersVersionlessInfrastructureReferencesUsingDiscover
 			require.NoError(t, group.IncreaseSize(1))
 		}
 	}
+}
+
+func TestFailoverDiscoveryUsesAVersionServingTheInfrastructureKind(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	controller.managementDiscoveryClient = &fakediscovery.FakeDiscovery{Fake: &clienttesting.Fake{Resources: []*metav1.APIResourceList{
+		{GroupVersion: failover.AzureAPIGroup + "/v1beta2", APIResources: []metav1.APIResource{{Name: "azureclusters", Kind: "AzureCluster", Namespaced: true}}},
+		{GroupVersion: failover.AzureAPIGroup + "/v1beta1", APIResources: []metav1.APIResource{{Name: "azuremachinepools", Kind: "AzureMachinePool", Namespaced: true}}},
+	}}}
+	version, err := controller.PreferredInfrastructureVersion(failover.AzureAPIGroup)
+	require.NoError(t, err)
+	assert.Equal(t, "v1beta1", version, "group preference must not select a version that lacks AzureMachinePool")
 }

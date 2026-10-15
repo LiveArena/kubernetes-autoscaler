@@ -185,10 +185,20 @@ ownership and physical UIDs. Duplicate/unknown fields, malformed data and
 unsupported versions are rejected.
 
 Infrastructure references support both explicit `apiVersion` and CAPI v1beta2
-versionless `apiGroup` forms. Versionless Azure references resolve through existing
-management API preferred-version discovery; no infrastructure version is guessed
-or hardcoded. Registration retains the resolved physical API identity, and write
-admission rejects live reference changes even on a cached group handle.
+versionless `apiGroup` forms. Management discovery resolves a namespaced endpoint
+for the specific API group/kind, not merely the group's preferred version. Discovery
+mappings are cached per failover writer; a missing mapping or obsolete endpoint
+gets one bounded refresh. A 404 is checked against refreshed routing before it can
+prove recorded resource absence. Permission, transport and discovery errors remain
+failures; they do not authorize trying unrelated resources or completing retirement.
+
+Kubernetes identity is API group, kind, namespace, name and UID. Equivalent served
+representation versions do not change Cluster ownership or registered Pool/AMP
+identity. Stored versions are route hints and can follow a served-version change
+without clearing history or changing registration. Unstructured reads validate
+the required fields and supported reference forms; unknown structural changes
+fail closed rather than bypassing validation. Live identity/reference/limit and
+resource-version write checks remain in place, with no parent Cluster reads.
 
 The supported wire contracts are pairing-only
 `aiproducer.com/worker-failover/v1` and lifecycle-intent
@@ -246,7 +256,7 @@ one primary and one secondary request.
 | `LifecycleStateVersion = 1` | Optional nested `PairLifecycle.version` | Lifecycle definition in `pair_lifecycle.go` |
 | Configuration APIs v1/v2 | `Configuration.apiVersion`, selecting pairing-only or lifecycle-intent wire shape | `config.go` |
 | Capability-report API v1 | Report `apiVersion` | `version/capabilities.go` |
-| Pool/AMP API versions | External Kubernetes `apiVersion` for exact resource lookup | Immutable registered member bindings |
+| Pool/AMP API versions | External Kubernetes routing hints resolved against served endpoints | Metadata alongside immutable member identity |
 
 The outer state and nested lifecycle are newly introduced formats with independent
 initial version 1. Future version increments follow actual supported-format
