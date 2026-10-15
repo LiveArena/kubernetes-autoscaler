@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -49,7 +50,7 @@ func newLifecycleAPIFixture(t *testing.T) *lifecycleAPIFixture {
 		map[string]interface{}{"apiGroups": []interface{}{""}, "resources": []interface{}{"configmaps"}, "resourceNames": []interface{}{"test-autoscaler-failover-config"}, "verbs": []interface{}{"get"}},
 		map[string]interface{}{"apiGroups": []interface{}{""}, "resources": []interface{}{"configmaps"}, "resourceNames": []interface{}{"test-autoscaler-failover-state"}, "verbs": []interface{}{"get", "update", "patch"}},
 		map[string]interface{}{"apiGroups": []interface{}{""}, "resources": []interface{}{"configmaps"}, "verbs": []interface{}{"create"}},
-		map[string]interface{}{"apiGroups": []interface{}{"cluster.x-k8s.io"}, "resources": []interface{}{"clusters", "machinepools"}, "verbs": []interface{}{"get"}},
+		map[string]interface{}{"apiGroups": []interface{}{"cluster.x-k8s.io"}, "resources": []interface{}{"machinepools"}, "verbs": []interface{}{"get"}},
 		map[string]interface{}{"apiGroups": []interface{}{"cluster.x-k8s.io"}, "resources": []interface{}{"machinepools/scale"}, "verbs": []interface{}{"get", "update", "patch"}},
 		map[string]interface{}{"apiGroups": []interface{}{AzureAPIGroup}, "resources": []interface{}{"azuremachinepools"}, "verbs": []interface{}{"get"}},
 	}
@@ -70,6 +71,8 @@ func newLifecycleAPIFixture(t *testing.T) *lifecycleAPIFixture {
 	t.Cleanup(func() { environment.failover.StopWriter() })
 	fixture := &lifecycleAPIFixture{api: api, environment: environment, scoped: scoped, groups: map[string]*testGroup{}, infrastructure: map[string]*unstructured.Unstructured{}, configuration: Configuration{APIVersion: LifecycleConfigVersion, Cluster: ClusterIdentity{Name: api.cluster.GetName(), Namespace: api.cluster.GetNamespace(), UID: api.cluster.GetUID()}, Pairs: map[string]ConfiguredPair{}}}
 	fixture.writeConfiguration(t)
+	_, err = client.Resource(environment.machinePoolResource.GroupVersion().WithResource("clusters")).Namespace(api.cluster.GetNamespace()).Get(api.context, api.cluster.GetName(), metav1.GetOptions{})
+	require.True(t, apierrors.IsForbidden(err), "lifecycle operations must run without Cluster read permission: %v", err)
 	return fixture
 }
 

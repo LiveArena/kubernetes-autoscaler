@@ -22,13 +22,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakescale "k8s.io/client-go/scale/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
 
-func TestScanReusesClusterAndConfigurationReadsWithoutResolvingUnpairedCapacity(t *testing.T) {
+func TestScanReusesConfigurationWithoutClusterReadsOrUnpairedCapacityLookups(t *testing.T) {
 	environment, _ := newActiveLifecycleEnvironment(t, "lin")
 	ctx := context.Background()
 	client := environment.managementClient.(*fakedynamic.FakeDynamicClient)
@@ -66,7 +69,7 @@ func TestScanReusesClusterAndConfigurationReadsWithoutResolvingUnpairedCapacity(
 			}
 		}
 	}
-	assert.Equal(t, 1, clusterReads, "one trusted Cluster read per scan is enough for all members")
+	assert.Zero(t, clusterReads, "parent identity comes from pool metadata, not a new Cluster permission")
 	assert.LessOrEqual(t, configReads, 2, "reuse read-only config but keep the store's authoritative intent check")
 	assert.Zero(t, unpairedInfrastructureReads)
 	for _, action := range scales.Actions() {
@@ -76,4 +79,83 @@ func TestScanReusesClusterAndConfigurationReadsWithoutResolvingUnpairedCapacity(
 	}
 	setPairLifecycleIntent(t, environment, "lin", "Retiring", "registration-lin", false)
 	require.Error(t, findLifecycleGroup(t, environment, "lin-primary").IncreaseSize(1), "scan memoization cannot leak into authoritative write admission")
+}
+
+func TestFailoverRegistrationScalingAndRetirementRequireNoClusterAccess(t *testing.T) {
+	environment, _ := newFailoverTestController(t)
+	ctx := context.Background()
+	client := environment.managementClient.(*fakedynamic.FakeDynamicClient)
+	clusters := environment.machinePoolResource.GroupVersion().WithResource("clusters")
+	cluster, err := client.Resource(clusters).Namespace("tenant").Get(ctx, "test", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, client.Tracker().Delete(clusters, "tenant", "test"))
+	clusterRequests := 0
+	client.PrependReactor("*", "clusters", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		clusterRequests++
+		return true, nil, apierrors.NewForbidden(clusters.GroupResource(), "test", nil)
+	})
+	setPairLifecycleIntent(t, environment, "lin", "Creating", "registration-lin", false)
+	environment.failover.Refresh()
+	state, _, err := environment.failover.Store.Load(ctx, cluster)
+	require.NoError(t, err)
+	require.Contains(t, state.Pairs, "lin")
+	assert.Equal(t, "Creating", state.Pairs["lin"].Lifecycle.State)
+	setPairLifecycleIntent(t, environment, "lin", "Active", "registration-lin", false)
+	environment.failover.Refresh()
+	primary := findLifecycleGroup(t, environment, "lin-primary")
+	require.NoError(t, primary.IncreaseSize(1))
+	setPairLifecycleIntent(t, environment, "lin", "Retiring", "registration-lin", false)
+	require.Error(t, primary.IncreaseSize(1), "removing parent reads must not bypass authoritative retirement admission")
+	environment.failover.Refresh()
+	retirePairFixtureResources(t, environment, "lin")
+	setPairLifecycleIntent(t, environment, "lin", "Retiring", "registration-lin", true)
+	environment.failover.Refresh()
+	state, _, err = environment.failover.Store.Load(ctx, cluster)
+	require.NoError(t, err)
+	assert.Equal(t, "Retired", state.Pairs["lin"].Lifecycle.State)
+	assert.True(t, state.Pairs["lin"].Lifecycle.OperationsSettled)
+	assert.Zero(t, clusterRequests, "no phase may require get, list, watch or write access to Cluster objects")
+}
+
+func TestParentMetadataStillRejectsMalformedOrInconsistentPoolOwners(t *testing.T) {
+	for _, scenario := range []struct{ fault, statement string }{
+		{"missing-owner", "MissingParentReferenceIsRejected"},
+		{"missing-uid", "MissingParentUIDIsRejected"},
+		{"missing-name", "MissingParentNameIsRejected"},
+		{"wrong-group", "ForeignParentAPIGroupIsRejected"},
+		{"missing-version", "MissingParentAPIVersionIsRejected"},
+		{"ambiguous-owner", "AmbiguousParentReferencesAreRejected"},
+		{"cluster-name-mismatch", "PoolClusterNameMustMatchItsParentReference"},
+		{"deleting-pool", "DeletingPoolIsRejectedWithoutInspectingParentState"},
+	} {
+		t.Run(scenario.statement, func(t *testing.T) {
+			environment, _ := newFailoverTestController(t)
+			group := findLifecycleGroup(t, environment, "lin-primary")
+			pool := group.Object().DeepCopy()
+			owners := pool.GetOwnerReferences()
+			switch scenario.fault {
+			case "missing-owner":
+				owners = nil
+			case "missing-uid":
+				owners[0].UID = ""
+			case "missing-name":
+				owners[0].Name = ""
+			case "wrong-group":
+				owners[0].APIVersion = "other.example/v1"
+			case "missing-version":
+				owners[0].APIVersion = "cluster.x-k8s.io/"
+			case "ambiguous-owner":
+				owners = append(owners, owners[0])
+			case "cluster-name-mismatch":
+				require.NoError(t, unstructured.SetNestedField(pool.Object, "another-cluster", "spec", "clusterName"))
+			case "deleting-pool":
+				now := metav1.Now()
+				pool.SetDeletionTimestamp(&now)
+			}
+			pool.SetOwnerReferences(owners)
+			group.object = pool
+			_, err := environment.failover.owningCluster(group)
+			require.Error(t, err)
+		})
+	}
 }

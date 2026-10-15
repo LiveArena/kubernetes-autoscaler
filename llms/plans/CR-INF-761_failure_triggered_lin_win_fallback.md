@@ -363,8 +363,9 @@ Configuration/state use the management client; workload nodes/pods use the
 workload-side discovery/snapshot. Configuration is read by exact-name GET on scans
 and before admitted writes. Reuse the prepared management permissions:
 
-Read-only Cluster/configuration lookups are memoized within one scan, including
-unpaired owning-Cluster scope discovery without AMP/scale capacity reads. Planning
+Read-only configuration lookups are memoized within one scan. Parent identity is
+derived from pool metadata; unpaired scope discovery needs neither parent reads
+nor AMP/scale capacity reads. Planning
 `TargetSize` uses the published scan target, updated after verified local writes.
 The cache does not cross scans or enter store/write authorization: live target,
 identity, current intent and CAS-retry checks remain fresh.
@@ -372,30 +373,25 @@ identity, current intent and CAS-retry checks remain fresh.
 - Configuration ConfigMap: exact-name read-only access.
 - State ConfigMap: exact-name read/update/patch and tenant-scoped create, because
   Kubernetes cannot restrict create by object name.
-- Owning CAPI Cluster: `get` restricted to the configured Cluster name in the
-  tenant Role; no Cluster list/watch, mutation or cluster-wide grant is required.
+- CAPI Cluster objects: no get/list/watch or mutation permission is required.
 - Existing MachinePool/scale, AMP and AMPM discovery/write access.
 
-**Explicit choice:** request additional namespaced CAPI Cluster `get` permission
-for active/freeze failover and lifecycle reconciliation, restricted with
-`resourceNames` to the configured Cluster. This is a chosen stronger safety
-contract, not an inherent requirement of primary/secondary pools or baseline
-replica management. It applies to both paired roles. No Cluster list/watch,
-mutation or cluster-wide grant is selected.
+**Explicit choice:** do not request new access to parent Cluster objects. Derive
+the parent name, namespace, API version and UID from the MachinePool owner reference,
+reject malformed/ambiguous references and require `spec.clusterName` plus config/state
+ownership to agree. Preserve physical Pool/AMP identity, lifecycle admission,
+live scale-target/limit/reference validation and CAS-retry protections.
 
-**Rationale:** independently verify that the actual parent exists, matches the
-pools' owner UID and is not deleting before trusting durable config/state bindings.
-Retained pools, configuration and state can agree with each other while referring
-to an obsolete parent; their mutual consistency does not establish parent liveness.
-This check detects that condition at validation time, not an atomic fence across
-Cluster and pool updates.
+**Rationale and accepted limit:** avoid expanding baseline pool-management access
+solely to confirm parent existence/deletion state. Retained pools, configuration
+and state can agree while referring to a parent that has disappeared, been recreated
+or started deleting; this implementation deliberately does not independently detect
+that condition. Existing deployment/resource-lifecycle coordination owns parent
+teardown safety. This applies to both paired roles and unpaired retirement scope
+discovery, and does not waive checks on the actual pools or infrastructure.
 
-**Alternative not selected:** derive Cluster identity only from pool/config owner
-references, retaining physical Pool/AMP UID, lifecycle and CAS protections without
-reading the parent. That would avoid the new permission but forgo independent
-missing/recreated/deleting-parent refusal. The current implementation deliberately
-retains that extra guarantee; the permission must be supplied explicitly by the
-deployment owner, not silently widened by the autoscaler.
+**Alternative not selected:** require live parent reads for an additional liveness
+check. Its extra Cluster permission is not part of the selected failover contract.
 
 Prepared name-scoped list/watch permissions may remain, but the config/state
 reader does not require namespace-wide list/watch. Any name-scoped list/watch

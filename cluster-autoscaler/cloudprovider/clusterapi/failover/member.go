@@ -39,7 +39,7 @@ type Member struct {
 // Member resolves live ownership and records usable workload nodes for a discovered group.
 func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) {
 	pool := group.Object()
-	cluster, err := policy.owningCluster(ctx, group)
+	cluster, err := policy.owningCluster(group)
 	if err != nil {
 		return nil, err
 	}
@@ -104,28 +104,26 @@ func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) 
 	return member, nil
 }
 
-func (policy *Policy) owningCluster(ctx context.Context, group Group) (*unstructured.Unstructured, error) {
+func (policy *Policy) owningCluster(group Group) (*unstructured.Unstructured, error) {
 	pool := group.Object()
-	if pool.GetKind() != MachinePoolKind || pool.GetUID() == "" || !pool.GetDeletionTimestamp().IsZero() {
+	if pool.GetKind() != MachinePoolKind || pool.GetUID() == "" || pool.GetNamespace() == "" || !pool.GetDeletionTimestamp().IsZero() {
 		return nil, fmt.Errorf("failover requires an active MachinePool with UID")
 	}
 	var cluster *unstructured.Unstructured
 	for _, owner := range pool.GetOwnerReferences() {
-		if owner.Kind != "Cluster" || owner.UID == "" {
+		if owner.Kind != "Cluster" {
 			continue
 		}
 		version, err := schema.ParseGroupVersion(owner.APIVersion)
-		if err != nil || version.Group != policy.Environment.MachinePoolResource().Group {
+		if err != nil || version.Group != policy.Environment.MachinePoolResource().Group || version.Version == "" || owner.Name == "" || owner.UID == "" || cluster != nil {
 			return nil, fmt.Errorf("invalid owning Cluster reference")
 		}
-		cluster, err = readScanCluster(ctx, policy.Store.Client, version.WithResource("clusters"), pool.GetNamespace(), owner.Name)
-		if err != nil {
-			return nil, err
-		}
-		if cluster.GetUID() != owner.UID || !cluster.GetDeletionTimestamp().IsZero() {
-			return nil, fmt.Errorf("stale or deleting owning Cluster")
-		}
-		break
+		cluster = &unstructured.Unstructured{}
+		cluster.SetAPIVersion(owner.APIVersion)
+		cluster.SetKind(owner.Kind)
+		cluster.SetNamespace(pool.GetNamespace())
+		cluster.SetName(owner.Name)
+		cluster.SetUID(owner.UID)
 	}
 	if cluster == nil {
 		return nil, fmt.Errorf("missing owning Cluster reference")

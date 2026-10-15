@@ -55,7 +55,7 @@ func (policy *Policy) configuredLifecycleMembers(ctx context.Context, cluster *u
 }
 
 func (policy *Policy) rememberUnpairedLifecycleCluster(ctx context.Context, group Group) {
-	cluster, err := policy.owningCluster(ctx, group)
+	cluster, err := policy.owningCluster(group)
 	if err != nil {
 		return
 	}
