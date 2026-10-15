@@ -31,11 +31,13 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	resourceapi "k8s.io/api/resource/v1beta1"
+	apiresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -1384,6 +1386,242 @@ func TestStaticAutoscalerRunOnceWithFilteringOnUpcomingNodesEnabledNoScaleUp(t *
 
 	mock.AssertExpectationsForObjects(t, allPodListerMock,
 		podDisruptionBudgetListerMock, daemonSetListerMock, onScaleUpMock, onScaleDownMock)
+}
+
+type failoverScanProvider struct {
+	*testprovider.TestCloudProvider
+	policies map[string]cloudprovider.NodeGroupCapacityPolicy
+}
+
+type failoverScanGroup struct {
+	cloudprovider.NodeGroup
+	provider *failoverScanProvider
+}
+
+func (group failoverScanGroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
+	return group.provider.policies[group.Id()]
+}
+
+func (provider *failoverScanProvider) NodeGroups() []cloudprovider.NodeGroup {
+	groups := provider.TestCloudProvider.NodeGroups()
+	for index, group := range groups {
+		groups[index] = &failoverScanGroup{NodeGroup: group, provider: provider}
+	}
+	return groups
+}
+
+func (provider *failoverScanProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	group, err := provider.TestCloudProvider.NodeGroupForNode(node)
+	if err != nil || group == nil {
+		return group, err
+	}
+	return &failoverScanGroup{NodeGroup: group, provider: provider}, nil
+}
+
+func TestFailedPrimaryCapacityRevealsOnlyResidualDemandWithinScalingLimits(t *testing.T) {
+	for _, pair := range []string{"lin", "win2"} {
+		for _, scenario := range []string{"normal", "no-demand", "incompatible", "pool-maximum", "global-limit", "failed-registered"} {
+			for _, disableAccounting := range []bool{false, true} {
+				if disableAccounting && scenario != "normal" {
+					continue
+				}
+				statement := map[string]string{
+					"normal":            "FailedPrimaryGapRevealsTheCanonicalResidualDemand",
+					"no-demand":         "NoResidualDemandDoesNotRequestSecondaryCapacity",
+					"incompatible":      "IncompatiblePodsDoNotRequestSecondaryCapacity",
+					"pool-maximum":      "SecondaryPoolMaximumRejectsAnIncompleteExpansion",
+					"global-limit":      "GlobalLimitsPreventAdditionalSecondaryCapacity",
+					"failed-registered": "FailedRegisteredPrimaryNodeCannotHideResidualDemand",
+				}[scenario]
+				if disableAccounting {
+					statement = "RemovingBlockedGapAccountingPreventsCanonicalFallback"
+				}
+				t.Run(fmt.Sprintf("%s/Pair=%s", statement, pair), func(t *testing.T) {
+					now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+					readyLister := kubernetes.NewTestNodeLister(nil)
+					allLister := kubernetes.NewTestNodeLister(nil)
+					pods := &podListerMock{}
+					pdbs := &podDisruptionBudgetListerMock{}
+					daemonsets := &daemonSetListerMock{}
+					templates := map[string]*framework.NodeInfo{}
+					nodes := []*apiv1.Node{}
+					writes := []GroupSizeChange{}
+					base := testprovider.NewTestCloudProviderBuilder().WithOnScaleUp(func(id string, delta int) error {
+						writes = append(writes, GroupSizeChange{GroupName: id, SizeChange: delta})
+						return nil
+					}).WithOnScaleDown(func(id, name string) error {
+						t.Errorf("unexpected deletion %s/%s", id, name)
+						return nil
+					}).WithMachineTemplates(templates).Build()
+					provider := &failoverScanProvider{TestCloudProvider: base, policies: map[string]cloudprovider.NodeGroupCapacityPolicy{}}
+					newNode := func(name, workload string) *apiv1.Node {
+						node := BuildTestNode(name, 2000, 100000)
+						node.Labels["test/workload"] = workload
+						node.Labels[apiv1.LabelOSStable] = "windows"
+						if workload == "lin" {
+							node.Labels[apiv1.LabelOSStable] = "linux"
+							node.Status.Capacity["nvidia.com/gpu"] = apiresource.MustParse("1")
+							node.Status.Allocatable["nvidia.com/gpu"] = apiresource.MustParse("1")
+						}
+						SetNodeReadyState(node, true, now.Add(-time.Minute))
+						return node
+					}
+					for _, workload := range []string{"lin", "win2"} {
+						primary, secondary := workload+"-primary", workload+"-secondary"
+						target := 1
+						if workload == pair {
+							target = 3
+						}
+						base.AddNodeGroup(primary, 1, 4, target)
+						maximum := 4
+						if workload == pair && scenario == "pool-maximum" {
+							maximum = 1
+						}
+						base.AddNodeGroup(secondary, 0, maximum, 0)
+						provider.policies[secondary] = cloudprovider.NodeGroupCapacityPolicy{ScaleUpBlocked: true, Reason: "healthy primary"}
+						template := newNode(workload+"-template", workload)
+						templates[primary] = framework.NewTestNodeInfo(template.DeepCopy())
+						templates[secondary] = framework.NewTestNodeInfo(template.DeepCopy())
+						node := newNode(primary+"-ready", workload)
+						base.AddNode(primary, node)
+						nodes = append(nodes, node)
+					}
+					occupied := BuildTestPod("occupied", 1800, 100)
+					occupied.Spec.NodeName = pair + "-primary-ready"
+					failedNodes := map[string]bool{}
+					if scenario == "failed-registered" {
+						node := newNode("failed-registered", pair)
+						SetNodeReadyState(node, false, now.Add(-time.Minute))
+						node.CreationTimestamp = metav1.NewTime(now.Add(-time.Minute))
+						base.AddNode(pair+"-primary", node)
+						nodes = append(nodes, node)
+						failedNodes[node.Name] = true
+					}
+					pending := []*apiv1.Pod{BuildTestPod("pending-1", 1400, 100, MarkUnschedulable()), BuildTestPod("pending-2", 1400, 100, MarkUnschedulable())}
+					for _, pod := range append([]*apiv1.Pod{occupied}, pending...) {
+						pod.Spec.NodeSelector = map[string]string{"test/workload": pair, apiv1.LabelOSStable: "windows"}
+						if pair == "lin" {
+							pod.Spec.NodeSelector[apiv1.LabelOSStable] = "linux"
+							pod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"] = apiresource.MustParse("1")
+							if pod.Spec.Containers[0].Resources.Limits == nil {
+								pod.Spec.Containers[0].Resources.Limits = apiv1.ResourceList{}
+							}
+							pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"] = apiresource.MustParse("1")
+						}
+					}
+					if scenario == "no-demand" {
+						pending = nil
+					} else if scenario == "incompatible" {
+						for _, pod := range pending {
+							if pair == "win2" {
+								pod.Spec.NodeSelector[apiv1.LabelOSStable] = "linux"
+							} else {
+								pod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"] = apiresource.MustParse("2")
+								pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"] = apiresource.MustParse("2")
+							}
+						}
+					}
+					daemon := BuildTestPod("daemon", 100, 0)
+					daemonset := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "daemon", Namespace: "default"}, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "daemon"}}, Template: apiv1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "daemon"}}, Spec: daemon.Spec}}}
+					options := config.AutoscalingOptions{
+						NodeGroupDefaults: config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 45 * time.Minute},
+						EstimatorName:     estimator.BinpackingEstimatorName, ScaleDownEnabled: false,
+						MaxNodesTotal: 20, MaxCoresTotal: 100, MaxMemoryTotal: 10000000,
+					}
+					if scenario == "global-limit" {
+						options.MaxNodesTotal = len(nodes)
+					}
+					callbacks := newStaticAutoscalerProcessorCallbacks()
+					context, err := NewScaleTestAutoscalingContext(options, &fake.Clientset{}, nil, provider, callbacks, nil)
+					require.NoError(t, err)
+					setUpScaleDownActuator(&context, options)
+					context.ListerRegistry = kube_util.NewListerRegistry(allLister, readyLister, pods, pdbs, daemonsets, nil, nil, nil, nil)
+					processors := processorstest.NewTestProcessors(&context)
+					registry := clusterstate.NewClusterStateRegistry(provider, clusterstate.ClusterStateRegistryConfig{OkTotalUnreadyCount: 10, MaxTotalUnreadyPercentage: 100}, context.LogRecorder, NewBackoff(), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(options.NodeGroupDefaults), processors.AsyncNodeGroupStateChecker)
+					planner, actuator := newScaleDownPlannerAndActuator(&context, processors, registry, nil)
+					orchestrator := orchestrator.New()
+					orchestrator.Initialize(&context, processors, registry, newEstimatorBuilder(), taints.TaintConfig{})
+					autoscaler := &StaticAutoscaler{AutoscalingContext: &context, clusterStateRegistry: registry, lastScaleUpTime: now, lastScaleDownFailTime: now, scaleDownPlanner: planner, scaleDownActuator: actuator, scaleUpOrchestrator: orchestrator, processors: processors, loopStartNotifier: loopstart.NewObserversList(nil), processorCallbacks: callbacks, initialized: true}
+					runScan := func() {
+						allLister.SetNodes(nodes)
+						readyNodes := []*apiv1.Node{}
+						for _, node := range nodes {
+							for _, condition := range node.Status.Conditions {
+								if condition.Type == apiv1.NodeReady && condition.Status == apiv1.ConditionTrue {
+									readyNodes = append(readyNodes, node)
+								}
+							}
+						}
+						readyLister.SetNodes(readyNodes)
+						pods.On("List").Return(append([]*apiv1.Pod{occupied}, pending...), nil).Once()
+						daemonsets.On("List", labels.Everything()).Return([]*appsv1.DaemonSet{daemonset}, nil).Once()
+						pdbs.On("List").Return([]*policyv1.PodDisruptionBudget{}, nil).Once()
+						require.NoError(t, autoscaler.RunOnce(now))
+						incoming, exclusions := registry.GetUpcomingNodes()
+						t.Logf("scan=%s incoming=%v exclusions=%v writes=%v", now.Format(time.RFC3339), incoming, exclusions, writes)
+						now = now.Add(10 * time.Second)
+					}
+					primary, secondary := pair+"-primary", pair+"-secondary"
+					runScan()
+					counts, _ := registry.GetUpcomingNodes()
+					assert.Equal(t, 2, counts[primary])
+					assert.Empty(t, writes)
+					provider.policies[primary] = cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: !disableAccounting, RetainTarget: true, ScaleUpBlocked: true, FailedRegisteredNodes: failedNodes, Reason: "terminal primary failure"}
+					provider.policies[secondary] = cloudprovider.NodeGroupCapacityPolicy{RequireFullScaleUp: true}
+					runScan()
+					if disableAccounting {
+						assert.Empty(t, writes)
+						return
+					}
+					if scenario == "no-demand" || scenario == "incompatible" || scenario == "global-limit" || scenario == "pool-maximum" {
+						assert.Empty(t, writes)
+						target, err := base.GetNodeGroup(secondary).TargetSize()
+						require.NoError(t, err)
+						assert.Zero(t, target)
+						primaryTarget, err := base.GetNodeGroup(primary).TargetSize()
+						require.NoError(t, err)
+						assert.Equal(t, 3, primaryTarget)
+						return
+					}
+					requested := 2
+					assert.Equal(t, []GroupSizeChange{{GroupName: secondary, SizeChange: requested}}, writes)
+					for index := 0; index < 3; index++ {
+						runScan()
+					}
+					counts, _ = registry.GetUpcomingNodes()
+					assert.Zero(t, counts[primary])
+					assert.Equal(t, requested, counts[secondary])
+					provider.policies[secondary] = cloudprovider.NodeGroupCapacityPolicy{BlockUnregistered: true, RetainTarget: true, ScaleUpBlocked: true, Reason: "both zones failed"}
+					now = now.Add(46 * time.Minute)
+					runScan()
+					for index := 0; index < 2; index++ {
+						node := newNode(fmt.Sprintf("secondary-ready-%d", index), pair)
+						base.AddNode(secondary, node)
+						nodes = append(nodes, node)
+					}
+					runScan()
+					for index := 0; index < 2; index++ {
+						node := newNode(fmt.Sprintf("primary-late-%d", index), pair)
+						base.AddNode(primary, node)
+						nodes = append(nodes, node)
+					}
+					runScan()
+					runScan()
+					provider.policies[primary] = cloudprovider.NodeGroupCapacityPolicy{}
+					provider.policies[secondary] = cloudprovider.NodeGroupCapacityPolicy{ScaleUpBlocked: true, Reason: "recovered primary"}
+					runScan()
+					assert.Len(t, writes, 1)
+					target, err := base.GetNodeGroup(primary).TargetSize()
+					require.NoError(t, err)
+					assert.Equal(t, 3, target)
+					target, err = base.GetNodeGroup(secondary).TargetSize()
+					require.NoError(t, err)
+					assert.Equal(t, 2, target)
+					mock.AssertExpectationsForObjects(t, pods, pdbs, daemonsets)
+				})
+			}
+		}
+	}
 }
 
 // We should not touch taints from unselected node groups.

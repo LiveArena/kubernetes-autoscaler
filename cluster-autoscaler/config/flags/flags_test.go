@@ -29,6 +29,25 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestFailoverModeFlagDefaultsToDisabledAndRejectsUnsupportedValues(t *testing.T) {
+	mode := flag.Lookup("azure-machinepool-failover-mode")
+	assert.NotNil(t, mode)
+	if mode != nil {
+		assert.Equal(t, "disabled", mode.DefValue)
+	}
+	assert.Nil(t, flag.Lookup("clusterapi-azure-failover"))
+	assert.Nil(t, flag.Lookup("clusterapi-azure-failover-freeze-admissions"))
+	value := azureFailoverModeValue("disabled")
+	for _, valid := range []string{"disabled", "active", "freeze"} {
+		assert.NoError(t, value.Set(valid))
+		assert.Equal(t, valid, value.String())
+	}
+	for _, invalid := range []string{"", "true", "enabled", "Active"} {
+		assert.Error(t, value.Set(invalid))
+		assert.Equal(t, "freeze", value.String())
+	}
+}
+
 func TestParseSingleGpuLimit(t *testing.T) {
 	type testcase struct {
 		input                string

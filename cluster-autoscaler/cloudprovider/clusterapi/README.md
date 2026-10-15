@@ -25,6 +25,7 @@ cluster.
 * [Specifying a Custom Resource Version](#specifying-a-custom-resource-version)
 * [Sample manifest](#sample-manifest)
   * [A note on permissions](#a-note-on-permissions)
+    * [Azure MachinePool failover permissions](#azure-machinepool-failover-permissions)
 * [Autoscaling with ClusterClass and Managed Topologies](#autoscaling-with-clusterclass-and-managed-topologies)
 * [Special note on GPU instances](#special-note-on-gpu-instances)
 * [Special note on balancing similar node groups](#special-note-on-balancing-similar-node-groups)
@@ -389,6 +390,34 @@ envsubst < examples/deployment.yaml | kubectl apply -f-
 The `cluster-autoscaler-management` role for accessing cluster api scalable resources is scoped to `ClusterRole`.
 This may not be ideal for all environments (eg. Multi tenant environments).
 In such cases, it is recommended to scope it to a `Role` mapped to a specific namespace.
+
+#### Azure MachinePool failover permissions
+
+The fork's opt-in `--azure-machinepool-failover-mode=active|freeze` adds management
+access for its configuration/state ConfigMaps beyond ordinary pool resizing, but
+does not require access to CAPI Cluster objects.
+
+**Explicit safety choice:** derive the parent name, namespace, API version and UID
+from the pool's owner reference, require consistency with `spec.clusterName` and
+configuration/state identity, and retain physical Pool/AMP UID, lifecycle and
+resource-version checks. Do not add Cluster get/list/watch or mutation permission.
+We accept that mutually consistent retained metadata cannot independently tell
+whether the parent has disappeared, been recreated or started deleting. Parent
+teardown coordination remains with the existing deployment/resource lifecycle.
+
+Failover compares resource identity by API group, kind, namespace, name and UID,
+not exact Kubernetes API version. It resolves served resource endpoints through
+cached management discovery and accepts supported legacy/versionless reference
+forms. Required fields, foreign groups and different UIDs remain strict; changing
+an API representation does not reset a pair's history. The failover configuration
+and persisted-state schema versions are separate contracts and remain validated.
+
+The baseline sample manifest and Helm Role/ClusterRole templates do not automatically
+include the failover ConfigMap additions. Deployment owners supply the scoped
+configuration/state ConfigMap access described in
+[CR-INF-761](../../../llms/plans/CR-INF-761_failure_triggered_lin_win_fallback.md#management-access-and-capability-verification).
+Helm exposes `rbac.additionalRules` for extra Role/ClusterRole rules; select the
+appropriate management namespace and Role scope rather than widening all tenants.
 
 
 ## Autoscaling with ClusterClass and Managed Topologies

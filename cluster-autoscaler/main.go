@@ -318,9 +318,17 @@ func main() {
 
 	logsapi.AddFlags(loggingConfig, pflag.CommandLine)
 	featureGate.AddFlag(pflag.CommandLine)
+	printCapabilities := pflag.Bool("capabilities", false, "Print compiled capabilities and source metadata as JSON, then exit without connecting to Kubernetes.")
 	kube_flag.InitFlags()
 
 	autoscalingOpts := flags.AutoscalingOptions()
+	capabilityReport := version.NewCapabilityReport(autoscalingOpts.CloudProviderName, autoscalingOpts.AzureMachinePoolFailoverMode, leaderElection.LeaderElect)
+	if *printCapabilities {
+		if err := version.WriteCapabilities(os.Stdout, capabilityReport); err != nil {
+			klog.Fatalf("Failed to report capabilities: %v", err)
+		}
+		return
+	}
 
 	// If the DRA flag is passed, we need to set the DRA feature gate as well. The selection of scheduler plugins for the default
 	// scheduling profile depends on feature gates, and the DRA plugin is only included if the DRA feature gate is enabled. The DRA
@@ -352,6 +360,7 @@ func main() {
 			pathRecorderMux.HandleFunc("/snapshotz", debuggingSnapshotter.ResponseHandler)
 		}
 		pathRecorderMux.HandleFunc("/health-check", healthCheck.ServeHTTP)
+		pathRecorderMux.HandleFunc("/capabilities", version.CapabilityHandler(capabilityReport))
 		if autoscalingOpts.EnableProfiling {
 			routes.Profiling{}.Install(pathRecorderMux)
 		}
@@ -360,6 +369,9 @@ func main() {
 	}()
 
 	if !leaderElection.LeaderElect {
+		if autoscalingOpts.AzureMachinePoolFailoverMode != "disabled" {
+			klog.Fatal("active/freeze Azure MachinePool failover requires autoscaler leader election")
+		}
 		run(healthCheck, debuggingSnapshotter)
 	} else {
 		id, err := os.Hostname()

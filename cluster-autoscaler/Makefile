@@ -60,6 +60,11 @@ test-build-tags:
 test-unit: clean build
 	go test --test.short -race ./... ${TAGS_FLAG}
 
+.PHONY: test-failover-api
+test-failover-api:
+	@test -n "$(INF761_TEST_API)" && test "$(INF761_TEST_API_DISPOSABLE)" = "1" || { echo "requires INF761_TEST_API and INF761_TEST_API_DISPOSABLE=1 for an authorized disposable API" >&2; exit 1; }
+	INF761_TEST_API="$(INF761_TEST_API)" INF761_TEST_API_DISPOSABLE=1 go test -race -p 2 -count=1 -vet=${GO_TEST_DEFAULT_ANALYZERS} -run '^TestDisposableAPI' ./cloudprovider/clusterapi/failover
+
 dev-release: dev-release-arch-$(GOARCH)
 
 dev-release-arch-%: build-arch-% make-image-arch-% push-image-arch-%

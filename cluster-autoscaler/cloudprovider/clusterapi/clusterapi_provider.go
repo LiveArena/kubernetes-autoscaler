@@ -16,6 +16,8 @@ limitations under the License.
 
 package clusterapi
 
+import "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
+
 import (
 	"fmt"
 	"path"
@@ -110,11 +112,17 @@ func (*provider) NewNodeGroup(
 	return nil, cloudprovider.ErrNotImplemented
 }
 
-func (*provider) Cleanup() error {
+func (p *provider) Cleanup() error {
+	if p.controller.failover != nil {
+		p.controller.failover.StopWriter()
+	}
 	return nil
 }
 
 func (p *provider) Refresh() error {
+	if p.controller.failover != nil {
+		p.controller.failover.Refresh()
+	}
 	return nil
 }
 
@@ -208,6 +216,22 @@ func BuildClusterAPI(opts config.AutoscalingOptions, do cloudprovider.NodeGroupD
 	controller, err := newMachineController(managementClient, workloadClient, managementDiscoveryClient, managementScaleClient, do, stopCh)
 	if err != nil {
 		klog.Fatal(err)
+	}
+
+	mode := opts.AzureMachinePoolFailoverMode
+	if mode == "" {
+		mode = failover.ModeDisabled
+	}
+	if err := failover.ValidateMode(mode); err != nil {
+		klog.Fatal(err)
+	}
+	if mode != failover.ModeDisabled {
+		if opts.BalanceSimilarNodeGroups {
+			klog.Fatal("Azure failover requires balance-similar-node-groups=false")
+		}
+		if err := controller.enableAzureFailover(mode == failover.ModeFreeze, opts.ScanInterval, opts.NodeGroupDefaults); err != nil {
+			klog.Fatal(err)
+		}
 	}
 
 	if err := controller.run(); err != nil {
