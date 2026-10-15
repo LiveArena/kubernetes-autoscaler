@@ -41,3 +41,8 @@ type Environment interface {
 	// VisitFailures visits terminal failures from a synchronized management informer snapshot.
 	VisitFailures(func(FailureObservation)) error
 }
+
+// InfrastructureVersionResolver supplies management discovery for versionless references.
+type InfrastructureVersionResolver interface {
+	PreferredInfrastructureVersion(string) (string, error)
+}

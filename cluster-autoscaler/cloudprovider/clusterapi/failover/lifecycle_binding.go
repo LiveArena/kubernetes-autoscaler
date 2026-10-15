@@ -47,8 +47,16 @@ func (store *Store) validateLifecycleBinding(ctx context.Context, cluster *unstr
 			return fmt.Errorf("registered pool Cluster or API identity changed")
 		}
 		reference, found, err := unstructured.NestedStringMap(pool.Object, "spec", "template", "spec", "infrastructureRef")
-		if err != nil || !found || reference["kind"] != "AzureMachinePool" || reference["name"] != record.InfrastructureName || reference["apiVersion"] != record.InfrastructureVersion || reference["namespace"] != "" && reference["namespace"] != cluster.GetNamespace() {
+		if err != nil || !found || reference["kind"] != "AzureMachinePool" || reference["name"] != record.InfrastructureName || reference["namespace"] != "" && reference["namespace"] != cluster.GetNamespace() {
 			return fmt.Errorf("registered pool infrastructure reference changed")
+		}
+		registered, err := schema.ParseGroupVersion(record.InfrastructureVersion)
+		if err != nil || registered.Group != AzureAPIGroup || registered.Version == "" {
+			return fmt.Errorf("invalid registered infrastructure API version")
+		}
+		referenced, err := infrastructureReferenceVersion(reference, func(group string) (string, error) { return registered.Version, nil })
+		if err != nil || referenced != registered {
+			return fmt.Errorf("registered pool infrastructure API identity changed")
 		}
 		owned := false
 		for _, owner := range pool.GetOwnerReferences() {

@@ -59,6 +59,18 @@ func (policy *Policy) AssertCurrentPool(ctx context.Context, group Group) error 
 	if reference.Name != group.Object().GetName() || resolved[reference.Name] != group.Object().GetUID() {
 		return fmt.Errorf("pool generation changed in failover configuration")
 	}
+	pool, err := policy.Store.Client.Resource(policy.Environment.MachinePoolResource()).Namespace(member.Cluster.GetNamespace()).Get(ctx, reference.Name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	infrastructure, found, err := unstructured.NestedStringMap(pool.Object, "spec", "template", "spec", "infrastructureRef")
+	if err != nil || !found || infrastructure["kind"] != "AzureMachinePool" || infrastructure["name"] != member.Infrastructure.GetName() || infrastructure["namespace"] != "" && infrastructure["namespace"] != member.Cluster.GetNamespace() {
+		return fmt.Errorf("live pool infrastructure reference changed since admission")
+	}
+	version, err := policy.infrastructureVersion(infrastructure)
+	if err != nil || version.String() != member.Infrastructure.GetAPIVersion() {
+		return fmt.Errorf("live pool infrastructure API identity changed since admission: %v", err)
+	}
 	return nil
 }
 

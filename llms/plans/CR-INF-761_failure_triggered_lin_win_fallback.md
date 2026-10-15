@@ -184,6 +184,12 @@ complete unique references, live `spec.clusterName`, role metadata, infrastructu
 ownership and physical UIDs. Duplicate/unknown fields, malformed data and
 unsupported versions are rejected.
 
+Infrastructure references support both explicit `apiVersion` and CAPI v1beta2
+versionless `apiGroup` forms. Versionless Azure references resolve through existing
+management API preferred-version discovery; no infrastructure version is guessed
+or hardcoded. Registration retains the resolved physical API identity, and write
+admission rejects live reference changes even on a cached group handle.
+
 The supported wire contracts are pairing-only
 `aiproducer.com/worker-failover/v1` and lifecycle-intent
 `aiproducer.com/worker-failover/v2`. V1 requires at least one complete pair and
@@ -366,7 +372,16 @@ identity, current intent and CAS-retry checks remain fresh.
 - Configuration ConfigMap: exact-name read-only access.
 - State ConfigMap: exact-name read/update/patch and tenant-scoped create, because
   Kubernetes cannot restrict create by object name.
-- Existing owning-Cluster, MachinePool/scale, AMP and AMPM discovery/write access.
+- Owning CAPI Cluster: `get` restricted to the configured Cluster name in the
+  tenant Role; no Cluster list/watch, mutation or cluster-wide grant is required.
+- Existing MachinePool/scale, AMP and AMPM discovery/write access.
+
+Cluster `get` is a failover-specific addition to the baseline pool-management
+permissions. It verifies that the actual parent exists, matches the pools' owner
+UID and is not deleting, establishing the root identity for config/state bindings.
+Agreement between retained pool/config owner references alone cannot establish
+that the parent is still current. Removing this read would weaken stale-parent
+and deleting-parent refusal, not just reduce redundant API traffic.
 
 Prepared name-scoped list/watch permissions may remain, but the config/state
 reader does not require namespace-wide list/watch. Any name-scoped list/watch

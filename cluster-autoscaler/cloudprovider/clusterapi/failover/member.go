@@ -47,9 +47,9 @@ func (policy *Policy) Member(ctx context.Context, group Group) (*Member, error) 
 	if err != nil || !found || ref["kind"] != "AzureMachinePool" || ref["name"] == "" || (ref["namespace"] != "" && ref["namespace"] != pool.GetNamespace()) {
 		return nil, fmt.Errorf("invalid AzureMachinePool infrastructure reference")
 	}
-	version, err := schema.ParseGroupVersion(ref["apiVersion"])
-	if err != nil || version.Group != AzureAPIGroup {
-		return nil, fmt.Errorf("invalid infrastructure API version")
+	version, err := policy.infrastructureVersion(ref)
+	if err != nil {
+		return nil, err
 	}
 	infrastructure, err := policy.Store.Client.Resource(version.WithResource("azuremachinepools")).Namespace(pool.GetNamespace()).Get(ctx, ref["name"], metav1.GetOptions{})
 	if err != nil {
