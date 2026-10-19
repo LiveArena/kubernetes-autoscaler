@@ -244,7 +244,7 @@ func (ng *nodegroup) DecreaseTargetSize(delta int) error {
 	return ng.scalableResource.SetSize(size + delta)
 }
 
-// Id returns an unique identifier of the node group.
+// GetCapacityPolicy returns the current capacity policy for the node group.
 func (ng *nodegroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
 	if ng.machineController.failover != nil {
 		return ng.machineController.failover.Capacity(ng)
@@ -252,6 +252,7 @@ func (ng *nodegroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
 	return failover.DisabledCapacity(ng.scalableResource.unstructured)
 }
 
+// Id returns a unique identifier of the node group.
 func (ng *nodegroup) Id() string {
 	return ng.scalableResource.ID()
 }
