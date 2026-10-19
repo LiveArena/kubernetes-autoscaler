@@ -22,15 +22,53 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
+
+type environmentWithUnsupportedNodeGroup struct{ Environment }
+
+func (environment environmentWithUnsupportedNodeGroup) NodeGroups() ([]cloudprovider.NodeGroup, error) {
+	groups, err := environment.Environment.NodeGroups()
+	if err != nil || len(groups) == 0 {
+		return groups, err
+	}
+	unsupported := struct{ cloudprovider.NodeGroup }{groups[0]}
+	return append([]cloudprovider.NodeGroup{unsupported}, groups...), nil
+}
+
+func TestFailoverDiscoverySkipsUnsupportedNodeGroups(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	groups, err := controller.NodeGroups()
+	require.NoError(t, err)
+	cluster, err := controller.failover.owningCluster(groups[0].(Group))
+	require.NoError(t, err)
+	controller.failover.Environment = environmentWithUnsupportedNodeGroup{controller}
+	t.Run("RefreshPreservesSupportedGroupPolicies", func(t *testing.T) {
+		require.NotPanics(t, controller.failover.Refresh)
+		require.Len(t, controller.failover.Policies, len(groups))
+		for _, group := range groups {
+			assert.NotNil(t, controller.failover.Policies[group.Id()].ExpectedTarget)
+		}
+	})
+	t.Run("MaximumChecksPreserveLiveLimitsAndRejectUnknownUIDs", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			capped, err := controller.failover.PrimaryAtMaximum(context.Background(), cluster, "lin", "lin-primary")
+			require.NoError(t, err)
+			assert.False(t, capped)
+			_, err = controller.failover.PrimaryAtMaximum(context.Background(), cluster, "lin", "missing-primary")
+			require.ErrorContains(t, err, "current primary pool cannot be resolved")
+		})
+	})
+}
 
 func TestPrimaryFitEvidenceDoesNotSurviveResetOrDiscoveryFailure(t *testing.T) {
 	controller, _ := newFailoverTestController(t)

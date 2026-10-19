@@ -33,7 +33,10 @@ func (policy *Policy) PrimaryAtMaximum(ctx context.Context, cluster *unstructure
 		return false, err
 	}
 	for _, candidate := range groups {
-		group := candidate.(Group)
+		group, ok := candidate.(Group)
+		if !ok {
+			continue
+		}
 		object := group.Object()
 		if object.GetNamespace() != cluster.GetNamespace() || object.GetUID() != uid {
 			continue

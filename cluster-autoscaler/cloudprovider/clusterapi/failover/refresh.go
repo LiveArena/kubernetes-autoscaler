@@ -69,7 +69,10 @@ func (policy *Policy) Refresh() {
 	available := map[string]map[string]*Member{}
 	discoveryComplete := true
 	for _, candidate := range groups {
-		group := candidate.(Group)
+		group, ok := candidate.(Group)
+		if !ok {
+			continue
+		}
 		annotations := group.Object().GetAnnotations()
 		pair, role := annotations[PairKey], annotations[RoleKey]
 		if pair == "" && role == "" {
