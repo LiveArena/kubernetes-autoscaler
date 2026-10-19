@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"testing"
+	"time"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,8 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
-	"testing"
-	"time"
 )
 
 func TestPrimaryFitEvidenceDoesNotSurviveResetOrDiscoveryFailure(t *testing.T) {

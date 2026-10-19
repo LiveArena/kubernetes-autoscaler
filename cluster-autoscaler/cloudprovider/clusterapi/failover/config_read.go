@@ -19,11 +19,12 @@ package failover
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	strictjson "sigs.k8s.io/json"
-	"strings"
 )
 
 // ReadConfiguration reads and validates the exact-name Cluster-owned configuration.

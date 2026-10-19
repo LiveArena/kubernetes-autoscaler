@@ -19,11 +19,12 @@ package failover
 import (
 	"context"
 	"fmt"
+	"path"
+	"time"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"path"
-	"time"
 )
 
 func (policy *Policy) beginPairOperation(id string) func() {

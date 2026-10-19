@@ -19,6 +19,9 @@ package clusterapi
 import (
 	"context"
 	"encoding/json"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,8 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	fakescale "k8s.io/client-go/scale/fake"
-	"testing"
-	"time"
 )
 
 func TestPairedTargetSizeUsesScanSnapshotButScaleWritesRevalidateLiveTargets(t *testing.T) {

@@ -18,8 +18,9 @@ package failover
 
 import (
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PrepareScaleRequest revalidates durable admission and records intent before a scale write.

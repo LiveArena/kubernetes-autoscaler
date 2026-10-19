@@ -16,12 +16,14 @@ limitations under the License.
 
 package clusterapi
 
-import "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
-
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/require"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
@@ -42,9 +45,6 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	clocktesting "k8s.io/utils/clock/testing"
-	"strconv"
-	"testing"
-	"time"
 )
 
 func newFailoverTestController(t *testing.T) (*machineController, *clocktesting.FakeClock) {

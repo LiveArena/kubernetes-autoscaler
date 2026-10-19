@@ -18,13 +18,14 @@ package failover
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
-	"testing"
-	"time"
 )
 
 func TestPrimaryPoolTrialDeadlineOnlyReleasesUnmetCommittedCapacity(t *testing.T) {

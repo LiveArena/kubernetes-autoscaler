@@ -17,8 +17,9 @@ limitations under the License.
 package failover
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ReconcileReadiness applies positive-evidence recovery and bounded secondary rechecks.

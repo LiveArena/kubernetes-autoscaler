@@ -19,6 +19,9 @@ package failover
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,8 +36,6 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/scale"
 	clocktesting "k8s.io/utils/clock/testing"
-	"testing"
-	"time"
 )
 
 func TestDisposableAPIEnforcesScopedPermissionsStateCASAndNonreplayedScaleWrites(t *testing.T) {

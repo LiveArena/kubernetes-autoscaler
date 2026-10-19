@@ -19,14 +19,15 @@ package failover
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // Policy reconciles durable pair state and publishes capacity and admission snapshots.

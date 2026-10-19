@@ -18,9 +18,10 @@ package failover
 
 import (
 	"fmt"
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"time"
 )
 
 // Request records a durable replica increment and its reconciliation evidence.

@@ -18,6 +18,10 @@ package failover
 
 import (
 	"context"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,9 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakescale "k8s.io/client-go/scale/fake"
-	"strings"
-	"testing"
-	"time"
 )
 
 func TestRedeploymentAndDeactivationPreserveStateWithoutTakingOverRetirement(t *testing.T) {

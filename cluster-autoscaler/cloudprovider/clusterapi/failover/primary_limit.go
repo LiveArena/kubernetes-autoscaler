@@ -19,10 +19,11 @@ package failover
 import (
 	"context"
 	"fmt"
+	"strconv"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"strconv"
 )
 
 // PrimaryAtMaximum verifies the selected primary identity and compares its live target with its maximum.

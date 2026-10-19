@@ -16,8 +16,6 @@ limitations under the License.
 
 package clusterapi
 
-import "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
-
 import (
 	"fmt"
 	"math/rand"
@@ -34,6 +32,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 

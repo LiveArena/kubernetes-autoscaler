@@ -18,6 +18,7 @@ package failover
 
 import (
 	"fmt"
+
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/klog/v2"
 )

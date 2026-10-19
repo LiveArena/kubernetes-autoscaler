@@ -17,14 +17,15 @@ limitations under the License.
 package failover
 
 import (
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakescale "k8s.io/client-go/scale/fake"
 	clienttesting "k8s.io/client-go/testing"
-	"testing"
-	"time"
 )
 
 func TestStoppingWriterCancelsAndDrainsLocalOperationsBeforeReturning(t *testing.T) {

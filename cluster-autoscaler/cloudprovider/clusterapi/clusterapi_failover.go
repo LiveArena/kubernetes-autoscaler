@@ -19,13 +19,14 @@ package clusterapi
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
-	"time"
 )
 
 func (controller *machineController) enableAzureFailover(frozen bool, scanInterval time.Duration, defaults ...config.NodeGroupAutoscalingOptions) error {

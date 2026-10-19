@@ -16,8 +16,6 @@ limitations under the License.
 
 package clusterapi
 
-import "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
-
 import (
 	"fmt"
 	"path"
@@ -35,6 +33,7 @@ import (
 	klog "k8s.io/klog/v2"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"

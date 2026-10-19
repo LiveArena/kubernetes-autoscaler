@@ -19,6 +19,9 @@ package failover
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
@@ -29,8 +32,6 @@ import (
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakescale "k8s.io/client-go/scale/fake"
 	clienttesting "k8s.io/client-go/testing"
-	"strings"
-	"testing"
 )
 
 func TestOnlyConfiguredCurrentPoolsScaleWhenPhysicalGenerationsOverlap(t *testing.T) {

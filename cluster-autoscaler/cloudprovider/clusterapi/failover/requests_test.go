@@ -19,6 +19,9 @@ package failover
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,8 +34,6 @@ import (
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakescale "k8s.io/client-go/scale/fake"
 	clienttesting "k8s.io/client-go/testing"
-	"testing"
-	"time"
 )
 
 func TestSecondaryPoolFailureDoesNotBlockPrimaryPoolAdmission(t *testing.T) {
