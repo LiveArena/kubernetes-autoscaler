@@ -22,9 +22,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -46,6 +48,150 @@ import (
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+type pairedPlannerProvider struct {
+	*testprovider.TestCloudProvider
+	policies map[string]cloudprovider.NodeGroupCapacityPolicy
+}
+
+type pairedPlannerGroup struct {
+	cloudprovider.NodeGroup
+	policy cloudprovider.NodeGroupCapacityPolicy
+}
+
+func (group *pairedPlannerGroup) GetCapacityPolicy() cloudprovider.NodeGroupCapacityPolicy {
+	return group.policy
+}
+
+func (provider *pairedPlannerProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	group, err := provider.TestCloudProvider.NodeGroupForNode(node)
+	if err != nil || group == nil {
+		return group, err
+	}
+	return &pairedPlannerGroup{NodeGroup: group, policy: provider.policies[group.Id()]}, nil
+}
+
+func TestSecondaryPoolRemovalPreferencePreservesSchedulingPDBAndMinimumSafety(t *testing.T) {
+	for _, scenario := range []string{"equivalent-empty", "equivalent-occupied", "busy-secondary", "incompatible-secondary", "primary-minimum", "secondary-minimum", "pdb-blocked", "pdb-allowed", "disabled"} {
+		statement := map[string]string{
+			"equivalent-empty":       "EquivalentEmptySecondaryPoolNodeIsRemovedFirst",
+			"equivalent-occupied":    "EquivalentOccupiedSecondaryPoolNodeIsRemovedFirst",
+			"busy-secondary":         "BusySecondaryPoolWorkDoesNotProtectUnusedPrimaryCapacity",
+			"incompatible-secondary": "IncompatibleSecondaryPoolWorkIsNotForcedOntoPrimaryNodes",
+			"primary-minimum":        "PrimaryPoolMinimumRemainsProtected",
+			"secondary-minimum":      "SecondaryPoolMinimumRemainsProtected",
+			"pdb-blocked":            "DisruptionBudgetCanBlockSecondaryPoolRemoval",
+			"pdb-allowed":            "PermittedDisruptionAllowsSafeSecondaryPoolRemoval",
+			"disabled":               "DisabledPreferencePreservesOriginalCandidateOrder",
+		}[scenario]
+		t.Run(statement, func(t *testing.T) {
+			now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+			primary := BuildTestNode("primary", 1000, 1000)
+			secondary := BuildTestNode("secondary", 1000, 1000)
+			SetNodeReadyState(primary, true, now.Add(-time.Hour))
+			SetNodeReadyState(secondary, true, now.Add(-time.Hour))
+			nodes := []*apiv1.Node{primary, secondary}
+			base := testprovider.NewTestCloudProviderBuilder().Build()
+			primaryMinimum, secondaryMinimum := 0, 0
+			if scenario == "primary-minimum" {
+				primaryMinimum = 1
+			}
+			if scenario == "secondary-minimum" {
+				secondaryMinimum = 1
+			}
+			base.AddNodeGroup("primary", primaryMinimum, 4, 1)
+			base.AddNodeGroup("secondary", secondaryMinimum, 4, 1)
+			base.AddNode("primary", primary)
+			base.AddNode("secondary", secondary)
+			policies := map[string]cloudprovider.NodeGroupCapacityPolicy{}
+			if scenario != "disabled" {
+				policies["primary"] = cloudprovider.NodeGroupCapacityPolicy{ScaleDownPair: "tenant/cluster/lin"}
+				policies["secondary"] = cloudprovider.NodeGroupCapacityPolicy{ScaleDownPair: "tenant/cluster/lin", ScaleDownSecondary: true}
+			}
+			provider := &pairedPlannerProvider{TestCloudProvider: base, policies: policies}
+			pods := []*apiv1.Pod{}
+			if scenario == "equivalent-occupied" {
+				pods = append(pods, SetRSPodSpec(BuildScheduledTestPod("primary-work", 400, 100, primary.Name), "rs"), SetRSPodSpec(BuildScheduledTestPod("secondary-work", 400, 100, secondary.Name), "rs"))
+			}
+			if scenario == "busy-secondary" || scenario == "incompatible-secondary" || scenario == "pdb-blocked" || scenario == "pdb-allowed" {
+				pod := SetRSPodSpec(BuildScheduledTestPod("work", 900, 100, secondary.Name), "rs")
+				if scenario == "pdb-blocked" || scenario == "pdb-allowed" {
+					pod = SetRSPodSpec(BuildScheduledTestPod("work", 400, 100, secondary.Name), "rs")
+					pod.Labels = map[string]string{"app": "work"}
+				}
+				if scenario == "incompatible-secondary" {
+					secondary.Labels["test/placement"] = "secondary"
+					pod.Spec.NodeSelector = map[string]string{"test/placement": "secondary"}
+				}
+				pods = append(pods, pod)
+			}
+			replicas, err := kube_util.NewTestReplicaSetLister(generateReplicaSets("rs", 1))
+			require.NoError(t, err)
+			listers := kube_util.NewListerRegistry(kube_util.NewTestNodeLister(nodes), kube_util.NewTestNodeLister(nodes), kube_util.NewTestPodLister(pods), kube_util.NewTestPodDisruptionBudgetLister(nil), nil, nil, nil, replicas, nil)
+			context, err := NewScaleTestAutoscalingContext(config.AutoscalingOptions{
+				NodeGroupDefaults:          config.NodeGroupAutoscalingOptions{ScaleDownUtilizationThreshold: 0.8, ScaleDownUnneededTime: 0},
+				ScaleDownSimulationTimeout: time.Second, MaxScaleDownParallelism: 1,
+			}, fake.NewSimpleClientset(), listers, provider, nil, nil)
+			require.NoError(t, err)
+			pdbs := []*policyv1.PodDisruptionBudget{}
+			if scenario == "pdb-blocked" || scenario == "pdb-allowed" {
+				allowed := int32(0)
+				if scenario == "pdb-allowed" {
+					allowed = 1
+				}
+				pdbs = []*policyv1.PodDisruptionBudget{{ObjectMeta: metav1.ObjectMeta{Name: "work", Namespace: "default"}, Spec: policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "work"}}}, Status: policyv1.PodDisruptionBudgetStatus{DisruptionsAllowed: allowed}}}
+			}
+			require.NoError(t, context.RemainingPdbTracker.SetPdbs(pdbs))
+			clustersnapshot.InitializeClusterSnapshotOrDie(t, context.ClusterSnapshot, nodes, pods)
+			planner := New(&context, processorstest.NewTestProcessors(&context), options.NodeDeleteOptions{}, nil)
+			candidates := nodes
+			if scenario == "pdb-blocked" || scenario == "pdb-allowed" {
+				candidates = []*apiv1.Node{secondary}
+			}
+			require.NoError(t, planner.UpdateClusterState(nodes, candidates, &fakeActuationStatus{}, now))
+			require.NoError(t, context.RemainingPdbTracker.SetPdbs(pdbs))
+			require.NoError(t, planner.UpdateClusterState(nodes, candidates, &fakeActuationStatus{}, now.Add(time.Second)))
+			empty, drain := planner.NodesToDelete(now)
+			selected := append(empty, drain...)
+			if scenario == "pdb-blocked" {
+				assert.Empty(t, selected)
+				assert.True(t, planner.unremovableNodes.Contains(secondary.Name))
+				return
+			}
+			require.NotEmpty(t, selected)
+			if scenario == "disabled" {
+				assert.Equal(t, nodes, planner.orderPairedCandidates(nodes))
+				return
+			}
+			wanted := "secondary"
+			if scenario == "busy-secondary" || scenario == "incompatible-secondary" || scenario == "secondary-minimum" {
+				wanted = "primary"
+			}
+			assert.Equal(t, wanted, selected[0].Name)
+			if scenario == "primary-minimum" {
+				for _, node := range selected {
+					assert.NotEqual(t, "primary", node.Name)
+				}
+			}
+			if scenario == "secondary-minimum" {
+				for _, node := range selected {
+					assert.NotEqual(t, "secondary", node.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestPairedRemovalOrderingPreservesUnrelatedPositionsAndInput(t *testing.T) {
+	type candidate struct {
+		name, pair string
+		secondary  bool
+	}
+	original := []candidate{{"lin-primary", "lin", false}, {"unrelated", "", false}, {"win-primary", "win", false}, {"lin-secondary", "lin", true}, {"win-secondary", "win", true}}
+	ordered := orderPairPositions(original, func(item candidate) (string, bool) { return item.pair, item.secondary })
+	assert.Equal(t, []candidate{{"lin-secondary", "lin", true}, {"unrelated", "", false}, {"win-secondary", "win", true}, {"lin-primary", "lin", false}, {"win-primary", "win", false}}, ordered)
+	assert.Equal(t, "lin-primary", original[0].name)
+}
 
 func TestUpdateClusterState(t *testing.T) {
 	testCases := []struct {

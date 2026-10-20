@@ -40,6 +40,7 @@ import (
 	klog "k8s.io/klog/v2"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
 )
 
 const (
@@ -97,6 +98,7 @@ type machineController struct {
 	stopChannel <-chan struct{}
 	// azureIntegration provides Azure-specific functionality when available
 	azureIntegration *AzureIntegration
+	failover         *failover.Policy
 }
 
 func indexMachinePoolByProviderID(obj interface{}) ([]string, error) {
@@ -225,6 +227,9 @@ func (c *machineController) run() error {
 	}
 	if c.machinePoolsAvailable {
 		syncFuncs = append(syncFuncs, c.machinePoolInformer.Informer().HasSynced)
+	}
+	if c.failover != nil {
+		syncFuncs = append(syncFuncs, c.azureIntegration.extension.azureMachinePoolMachineInformer.Informer().HasSynced, c.failover.Handler.HasSynced)
 	}
 
 	klog.V(4).Infof("waiting for caches to sync")

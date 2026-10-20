@@ -121,6 +121,7 @@ func (p *Planner) UpdateClusterState(podDestinations, scaleDownCandidates []*api
 	deletions := asMap(merged(as.DeletionsInProgress()))
 	podDestinations = filterOutOngoingDeletions(podDestinations, deletions)
 	scaleDownCandidates = filterOutOngoingDeletions(scaleDownCandidates, deletions)
+	scaleDownCandidates = p.orderPairedCandidates(scaleDownCandidates)
 	p.categorizeNodes(asMap(nodeNames(podDestinations)), scaleDownCandidates)
 	p.rs.DropOldHints()
 	p.actuationInjector.DropOldHints()
@@ -154,6 +155,7 @@ func (p *Planner) NodesToDelete(_ time.Time) (empty, needDrain []*apiv1.Node) {
 
 	needDrainRemovableNodes = sortByRisk(needDrainRemovableNodes)
 	candidatesToBeRemoved := append(emptyRemovableNodes, needDrainRemovableNodes...)
+	candidatesToBeRemoved = p.orderPairedRemovals(candidatesToBeRemoved)
 
 	nodesToRemove, unremovableNodes := p.scaleDownSetProcessor.FilterUnremovableNodes(p.context, p.scaleDownContext, candidatesToBeRemoved)
 	p.addUnremovableNodes(unremovableNodes)

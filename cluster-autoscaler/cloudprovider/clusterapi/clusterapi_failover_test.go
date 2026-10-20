@@ -1,0 +1,228 @@
+/*
+Copyright 2026 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package clusterapi
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/clusterapi/failover"
+	fakescale "k8s.io/client-go/scale/fake"
+)
+
+func TestPairedTargetSizeUsesScanSnapshotButScaleWritesRevalidateLiveTargets(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	provider := &provider{controller: controller}
+	require.NoError(t, provider.Refresh())
+	var primary *nodegroup
+	for _, candidate := range provider.NodeGroups() {
+		if candidate.(*nodegroup).Object().GetName() == "lin-primary" {
+			primary = candidate.(*nodegroup)
+		}
+	}
+	require.NotNil(t, primary)
+	scales := controller.managementScaleClient.(*fakescale.FakeScaleClient)
+	scales.ClearActions()
+	for index := 0; index < 5; index++ {
+		target, err := primary.TargetSize()
+		require.NoError(t, err)
+		assert.Equal(t, 3, target)
+	}
+	assert.Empty(t, scales.Actions(), "planning reads must not repeatedly query the management scale subresource")
+	pools := controller.managementClient.Resource(controller.machinePoolResource).Namespace("tenant")
+	pool, err := pools.Get(context.Background(), "lin-primary", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(pool.Object, int64(2), "spec", "replicas"))
+	_, err = pools.Update(context.Background(), pool, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	target, err := primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 3, target, "external target changes must not mutate the planning snapshot")
+	require.Error(t, primary.IncreaseSize(1), "writes still reject a live target changed since the scan")
+	require.NoError(t, provider.Refresh())
+	target, err = primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 2, target)
+	require.NoError(t, primary.IncreaseSize(1))
+	scales.ClearActions()
+	target, err = primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 3, target, "a verified local write updates the published target without another GET")
+	assert.Empty(t, scales.Actions())
+}
+
+func TestActualProviderRevalidatesPairLifecycleBeforeCachedScaleWrites(t *testing.T) {
+	controller, _ := newFailoverTestController(t)
+	provider := &provider{controller: controller}
+	ctx := context.Background()
+	maps := controller.managementClient.Resource(failover.ConfigMaps).Namespace("tenant")
+	setIntent := func(identifier, desired string) {
+		object, err := maps.Get(ctx, "test-autoscaler-failover-config", metav1.GetOptions{})
+		require.NoError(t, err)
+		encoded, _, err := unstructured.NestedString(object.Object, "data", "config.json")
+		require.NoError(t, err)
+		configuration := failover.Configuration{}
+		require.NoError(t, json.Unmarshal([]byte(encoded), &configuration))
+		configuration.APIVersion = failover.LifecycleConfigVersion
+		for name, pair := range configuration.Pairs {
+			if pair.Intent == nil {
+				pair.Intent = &failover.PairIntent{State: "Creating", RegistrationID: "registration-" + name}
+			}
+			if identifier == name {
+				pair.Intent.State = desired
+			}
+			configuration.Pairs[name] = pair
+		}
+		data, err := json.Marshal(configuration)
+		require.NoError(t, err)
+		require.NoError(t, unstructured.SetNestedField(object.Object, string(data), "data", "config.json"))
+		_, err = maps.Update(ctx, object, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+	setIntent("lin", "Creating")
+	require.NoError(t, provider.Refresh())
+	setIntent("lin", "Active")
+	setIntent("win2", "Active")
+	require.NoError(t, provider.Refresh())
+	var primary *nodegroup
+	for _, candidate := range provider.NodeGroups() {
+		group := candidate.(*nodegroup)
+		if group.Object().GetName() == "lin-primary" {
+			primary = group
+		}
+	}
+	require.NotNil(t, primary)
+	setIntent("lin", "Retiring")
+	require.Error(t, primary.IncreaseSize(1))
+	target, err := primary.TargetSize()
+	require.NoError(t, err)
+	assert.Equal(t, 3, target)
+	require.NoError(t, provider.Refresh())
+	for _, candidate := range provider.NodeGroups() {
+		group := candidate.(*nodegroup)
+		if group.Object().GetName() == "win2-primary" {
+			require.NoError(t, group.IncreaseSize(1))
+		}
+	}
+}
+
+func TestOnlyLiveAMPMsOwnedBySelectedInfrastructureExcludeRegisteredCapacity(t *testing.T) {
+	for _, scenario := range []string{"selected-owner", "wrong-owner", "deleting"} {
+		statement := map[string]string{
+			"selected-owner": "SelectedInfrastructureFailureExcludesItsRegisteredNode",
+			"wrong-owner":    "OtherInfrastructureFailureDoesNotExcludeRegisteredCapacity",
+			"deleting":       "DeletingMachinesDoNotExcludeRegisteredCapacity",
+		}[scenario]
+		t.Run(statement, func(t *testing.T) {
+			controller, clock := newFailoverTestController(t)
+			var group *nodegroup
+			for _, candidate := range (&provider{controller: controller}).NodeGroups() {
+				if candidate.(*nodegroup).Object().GetName() == "lin-primary" {
+					group = candidate.(*nodegroup)
+				}
+			}
+			require.NotNil(t, group)
+			node, err := controller.FindNodeByProviderID("azure://lin-primary")
+			require.NoError(t, err)
+			require.NotNil(t, node)
+			node.Status.Conditions[0].Status = "False"
+			require.NoError(t, controller.nodeInformer.GetStore().Update(node))
+			machine := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": azureMachinePoolMachineApiGroup + "/v1beta1", "kind": "AzureMachinePoolMachine", "spec": map[string]interface{}{"providerID": "azure://lin-primary"}, "status": map[string]interface{}{"provisioningState": "Failed"}}}
+			machine.SetName("registered-failure")
+			machine.SetNamespace("tenant")
+			machine.SetUID("registered-failure-uid")
+			machine.SetCreationTimestamp(metav1.NewTime(clock.Now()))
+			ownerUID := types.UID("lin-primary-amp")
+			if scenario == "wrong-owner" {
+				ownerUID = "another-generation-amp"
+			} else if scenario == "deleting" {
+				machine.SetDeletionTimestamp(&metav1.Time{Time: clock.Now()})
+			}
+			machine.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: azureMachinePoolMachineApiGroup + "/v1beta1", Kind: "AzureMachinePool", Name: "lin-primary", UID: ownerUID}})
+			require.NoError(t, controller.azureIntegration.extension.azureMachinePoolMachineInformer.Informer().GetStore().Add(machine))
+			member, err := controller.failover.Member(context.Background(), group)
+			require.NoError(t, err)
+			assert.Equal(t, scenario == "selected-owner", member.FailedNodes[node.Name], "only a live terminal AMPM owned by the selected AMP may exclude registered capacity")
+			assert.Contains(t, member.NotReadyCreated, node.Name)
+		})
+	}
+}
+
+func TestPrimaryFailureEnablesSecondaryCapacityWithoutReplayOrPrimaryTargetReduction(t *testing.T) {
+	for _, pair := range []string{"lin", "win2"} {
+		t.Run("PrimaryFailurePreservesIntentAndOtherPairPreference/Pair="+pair, func(t *testing.T) {
+			controller, clock := newFailoverTestController(t)
+			provider := &provider{controller: controller}
+			require.NoError(t, provider.Refresh())
+			findGroup := func(name string) *nodegroup {
+				for _, group := range provider.NodeGroups() {
+					if group.(*nodegroup).scalableResource.Name() == name {
+						return group.(*nodegroup)
+					}
+				}
+				t.Fatalf("group %s missing", name)
+				return nil
+			}
+			primary, secondary := findGroup(pair+"-primary"), findGroup(pair+"-secondary")
+			assert.False(t, primary.GetCapacityPolicy().BlockUnregistered)
+			assert.True(t, secondary.GetCapacityPolicy().ScaleUpBlocked)
+			failed := &unstructured.Unstructured{Object: map[string]interface{}{"status": map[string]interface{}{"provisioningState": "Failed"}}}
+			failed.SetUID("failed-attempt")
+			failed.SetNamespace("tenant")
+			failed.SetCreationTimestamp(metav1.NewTime(clock.Now()))
+			failed.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1", Kind: "AzureMachinePool", Name: pair + "-primary", UID: types.UID(pair + "-primary-amp")}})
+			for index := 0; index < 100; index++ {
+				controller.failover.Observe(failed)
+			}
+			require.NoError(t, provider.Refresh())
+			assert.True(t, primary.GetCapacityPolicy().BlockUnregistered)
+			assert.Empty(t, controller.failover.Observations)
+			assert.False(t, secondary.GetCapacityPolicy().ScaleUpBlocked)
+			require.NoError(t, secondary.IncreaseSize(2))
+			assert.Error(t, secondary.IncreaseSize(2))
+			assert.Error(t, primary.DecreaseTargetSize(-2))
+			target, err := primary.TargetSize()
+			require.NoError(t, err)
+			assert.Equal(t, 3, target)
+			target, err = secondary.TargetSize()
+			require.NoError(t, err)
+			assert.Equal(t, 2, target)
+			require.NoError(t, controller.enableAzureFailover(true, 10*time.Second))
+			clock.Step(31 * time.Second)
+			controller.failover.Clock = clock
+			require.NoError(t, provider.Refresh())
+			assert.True(t, primary.GetCapacityPolicy().BlockUnregistered)
+			assert.True(t, secondary.GetCapacityPolicy().ScaleUpBlocked)
+			target, err = secondary.TargetSize()
+			require.NoError(t, err)
+			assert.Equal(t, 2, target)
+			other := "lin"
+			if pair == "lin" {
+				other = "win2"
+			}
+			assert.False(t, findGroup(other+"-primary").GetCapacityPolicy().BlockUnregistered)
+			assert.True(t, findGroup(other+"-secondary").GetCapacityPolicy().ScaleUpBlocked)
+		})
+	}
+}
